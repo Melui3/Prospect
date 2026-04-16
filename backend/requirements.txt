@@ -8,3 +8,4 @@ beautifulsoup4>=4.12
 gunicorn>=22.0
 whitenoise>=6.7
 dj-database-url>=2.1
+djangorestframework-simplejwt>=5.3

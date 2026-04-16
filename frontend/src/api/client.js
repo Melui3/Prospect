@@ -5,6 +5,61 @@ const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+// ── Auth helpers ───────────────────────────────────────────────
+export function getAccessToken() {
+  return localStorage.getItem("access_token");
+}
+
+export function isAuthenticated() {
+  return !!getAccessToken();
+}
+
+export async function login(username, password) {
+  const res = await axios.post(
+    (import.meta.env.VITE_API_URL ?? "/api").replace(/\/api$/, "") + "/api/token/",
+    { username, password }
+  );
+  localStorage.setItem("access_token", res.data.access);
+  localStorage.setItem("refresh_token", res.data.refresh);
+}
+
+export function logout() {
+  localStorage.removeItem("access_token");
+  localStorage.removeItem("refresh_token");
+}
+
+// ── Interceptors ───────────────────────────────────────────────
+api.interceptors.request.use((config) => {
+  const token = getAccessToken();
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+api.interceptors.response.use(
+  (res) => res,
+  async (error) => {
+    const original = error.config;
+    if (error.response?.status === 401 && !original._retry) {
+      original._retry = true;
+      const refresh = localStorage.getItem("refresh_token");
+      if (refresh) {
+        try {
+          const base = (import.meta.env.VITE_API_URL ?? "/api").replace(/\/api$/, "");
+          const res = await axios.post(base + "/api/token/refresh/", { refresh });
+          localStorage.setItem("access_token", res.data.access);
+          original.headers.Authorization = `Bearer ${res.data.access}`;
+          return api(original);
+        } catch {
+          // refresh failed
+        }
+      }
+      logout();
+      window.location.replace(window.location.origin + window.location.pathname.split("#")[0] + "#/login");
+    }
+    return Promise.reject(error);
+  }
+);
+
 // ── Campaigns ─────────────────────────────────────────────────
 export const getCampaigns = () => api.get("/campaigns/").then((r) => r.data);
 export const createCampaign = (data) => api.post("/campaigns/", data).then((r) => r.data);

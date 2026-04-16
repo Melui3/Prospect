@@ -1,4 +1,5 @@
-import { Outlet, NavLink } from "react-router-dom";
+import { Outlet, NavLink, useNavigate } from "react-router-dom";
+import { logout } from "../api/client";
 
 const navItems = [
   { to: "/dashboard", label: "Dashboard", icon: "📊" },
@@ -8,6 +9,13 @@ const navItems = [
 ];
 
 export default function Layout() {
+  const navigate = useNavigate();
+
+  function handleLogout() {
+    logout();
+    navigate("/login", { replace: true });
+  }
+
   return (
     <div className="flex min-h-screen">
       {/* Sidebar */}
@@ -34,8 +42,14 @@ export default function Layout() {
             </NavLink>
           ))}
         </nav>
-        <div className="px-6 py-4 border-t border-slate-700 text-xs text-slate-500">
-          OSM + Pages Jaunes
+        <div className="px-6 py-4 border-t border-slate-700 flex items-center justify-between">
+          <span className="text-xs text-slate-500">OSM + Pages Jaunes</span>
+          <button
+            onClick={handleLogout}
+            className="text-xs text-slate-400 hover:text-white transition-colors"
+          >
+            Déconnexion
+          </button>
         </div>
       </aside>
 
