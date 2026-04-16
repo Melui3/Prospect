@@ -14,7 +14,9 @@
       "Bash(git -C g:/Projets/Prospect show b12e508:frontend/src/App.jsx)",
       "Bash(git -C g:/Projets/Prospect show b12e508^:frontend/src/App.jsx)",
       "Bash(git -C g:/Projets/Prospect show f7db082:frontend/src/App.jsx)",
-      "Bash(git -C g:/Projets/Prospect log origin/gh-pages --oneline -5)"
+      "Bash(git -C g:/Projets/Prospect log origin/gh-pages --oneline -5)",
+      "Bash(git -C g:/Projets/Prospect log origin/gh-pages --oneline -3)",
+      "Bash(git -C g:/Projets/Prospect show origin/gh-pages:assets/index-CKdPXGby.js)"
     ]
   }
 }
