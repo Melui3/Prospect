@@ -7,7 +7,7 @@ import Templates from "./pages/Templates";
 
 export default function App() {
   return (
-    <HashRouter basename={import.meta.env.BASE_URL} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <HashRouter>
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
