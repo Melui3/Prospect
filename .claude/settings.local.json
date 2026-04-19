@@ -16,7 +16,19 @@
       "Bash(git -C g:/Projets/Prospect show f7db082:frontend/src/App.jsx)",
       "Bash(git -C g:/Projets/Prospect log origin/gh-pages --oneline -5)",
       "Bash(git -C g:/Projets/Prospect log origin/gh-pages --oneline -3)",
-      "Bash(git -C g:/Projets/Prospect show origin/gh-pages:assets/index-CKdPXGby.js)"
+      "Bash(git -C g:/Projets/Prospect show origin/gh-pages:assets/index-CKdPXGby.js)",
+      "Bash(git -C g:/Projets/Prospect status)",
+      "Bash(git -C g:/Projets/Prospect status -u)",
+      "Bash(git -C g:/Projets/Prospect check-ignore -v frontend/public/404.html)",
+      "Bash(git -C g:/Projets/Prospect diff frontend/vite.config.js)",
+      "Bash(git -C g:/Projets/Prospect status frontend/)",
+      "Bash(git -C g:/Projets/Prospect show 40b292f -- frontend/vite.config.js)",
+      "Bash(git -C g:/Projets/Prospect ls-files --others --exclude-standard frontend/public/)",
+      "Bash(git -C g:/Projets/Prospect ls-files --ignored --exclude-standard frontend/public/)",
+      "Bash(git -C g:/Projets/Prospect ls-files --ignored -o --exclude-standard frontend/public/)",
+      "Bash(git -C g:/Projets/Prospect ls-files --others --exclude-standard --directory)",
+      "Bash(git -C g:/Projets/Prospect add frontend/public/404.html)",
+      "Bash(git -C *)"
     ]
   }
 }
