@@ -5,6 +5,7 @@ import Campaigns from "./pages/Campaigns";
 import Prospects from "./pages/Prospects";
 import Templates from "./pages/Templates";
 import Login from "./pages/Login";
+import Register from "./pages/Register";
 import { isAuthenticated } from "./api/client";
 
 function RequireAuth({ children }) {
@@ -16,6 +17,7 @@ export default function App() {
     <HashRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
         <Route
           path="/"
           element={

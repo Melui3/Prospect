@@ -1,7 +1,9 @@
 from django.utils import timezone
 from django.db.models import Count, Q
+from django.contrib.auth.models import User
 from rest_framework import viewsets, status
-from rest_framework.decorators import action, api_view
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from .models import Campaign, Prospect, EmailTemplate, EmailLog
@@ -109,6 +111,25 @@ class EmailTemplateViewSet(viewsets.ModelViewSet):
     queryset = EmailTemplate.objects.all()
     serializer_class = EmailTemplateSerializer
     http_method_names = ["get", "post", "patch", "delete"]
+
+
+# ── Register ──────────────────────────────────────────────────
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def register(request):
+    username = request.data.get("username", "").strip()
+    password = request.data.get("password", "")
+
+    if not username or not password:
+        return Response({"error": "Champs requis."}, status=status.HTTP_400_BAD_REQUEST)
+    if len(password) < 8:
+        return Response({"error": "Mot de passe trop court (8 caractères min)."}, status=status.HTTP_400_BAD_REQUEST)
+    if User.objects.filter(username=username).exists():
+        return Response({"error": "Ce nom d'utilisateur est déjà pris."}, status=status.HTTP_400_BAD_REQUEST)
+
+    User.objects.create_user(username=username, password=password)
+    return Response({"message": "Compte créé."}, status=status.HTTP_201_CREATED)
 
 
 # ── Stats globales ─────────────────────────────────────────────
