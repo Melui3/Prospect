@@ -1,7 +1,10 @@
 import axios from "axios";
 
+export const API_URL = import.meta.env.VITE_API_URL
+  ?? (import.meta.env.DEV ? "/api" : "https://very-annalise-honeygroup-12ff0f9f.koyeb.app/api");
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL ?? "/api",
+  baseURL: API_URL,
   headers: { "Content-Type": "application/json" },
 });
 
@@ -16,7 +19,7 @@ export function isAuthenticated() {
 
 export async function login(username, password) {
   const res = await axios.post(
-    (import.meta.env.VITE_API_URL ?? "/api").replace(/\/api$/, "") + "/api/token/",
+    API_URL.replace(/\/api$/, "") + "/api/token/",
     { username, password }
   );
   localStorage.setItem("access_token", res.data.access);
@@ -44,7 +47,7 @@ api.interceptors.response.use(
       const refresh = localStorage.getItem("refresh_token");
       if (refresh) {
         try {
-          const base = (import.meta.env.VITE_API_URL ?? "/api").replace(/\/api$/, "");
+          const base = API_URL.replace(/\/api$/, "");
           const res = await axios.post(base + "/api/token/refresh/", { refresh });
           localStorage.setItem("access_token", res.data.access);
           original.headers.Authorization = `Bearer ${res.data.access}`;

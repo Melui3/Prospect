@@ -1,9 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import axios from "axios";
-import { login } from "../api/client";
-
-const base = (import.meta.env.VITE_API_URL ?? "/api").replace(/\/api$/, "");
+import { login, API_URL } from "../api/client";
 
 export default function Register() {
   const [username, setUsername] = useState("");
@@ -22,7 +20,7 @@ export default function Register() {
     }
     setLoading(true);
     try {
-      await axios.post(base + "/api/register/", { username, password });
+      await axios.post(API_URL.replace(/\/api$/, "") + "/api/register/", { username, password });
       await login(username, password);
       navigate("/dashboard", { replace: true });
     } catch (err) {
