@@ -45,6 +45,20 @@ export default function Layout() {
 
   const isOwner = session?.is_owner;
   const demoEnabled = session?.demo_enabled;
+  const sessionTitle = !session
+    ? "Chargement"
+    : !demoEnabled
+      ? "Protection inactive"
+      : isOwner
+        ? "Session privee"
+        : "Mode demo";
+  const sessionSubtitle = !session
+    ? "Verification en cours"
+    : !demoEnabled
+      ? "OWNER_ACCESS_TOKEN absent"
+      : isOwner
+        ? "Donnees reelles"
+        : "Donnees publiques fictives";
 
   return (
     <div className="flex min-h-screen">
@@ -78,10 +92,10 @@ export default function Layout() {
         <div className="px-4 py-4 border-t border-slate-700 space-y-3">
           <div>
             <p className="text-xs font-medium text-slate-200">
-              {isOwner ? "Session privee" : "Mode demo"}
+              {sessionTitle}
             </p>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              {isOwner ? "Donnees reelles" : "Donnees publiques fictives"}
+              {sessionSubtitle}
             </p>
           </div>
 
@@ -115,7 +129,9 @@ export default function Layout() {
           )}
 
           {!demoEnabled && (
-            <span className="text-xs text-slate-500">Acces local ouvert</span>
+            <p className="text-xs text-slate-500">
+              Ajoute la variable sur le backend pour activer la demo publique.
+            </p>
           )}
         </div>
       </aside>
