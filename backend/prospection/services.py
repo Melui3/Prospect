@@ -14,6 +14,11 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
+REQUEST_HEADERS = {
+    "User-Agent": "prospect-app/1.0",
+    "Accept": "application/json",
+}
+
 # ── Tags OSM connus ────────────────────────────────────────────
 OSM_TAGS = {
     "boulangerie": '"shop"="bakery"',
@@ -39,7 +44,7 @@ def _get_city_coords(ville: str) -> tuple[str, str] | None:
         resp = requests.get(
             "https://nominatim.openstreetmap.org/search",
             params={"q": ville, "format": "json", "limit": 1},
-            headers={"User-Agent": "prospect-app/1.0"},
+            headers=REQUEST_HEADERS,
             timeout=10,
         )
         data = resp.json()
@@ -58,15 +63,17 @@ def _query_overpass(tag: str, lat: str, lon: str, rayon_m: int) -> list[dict]:
     out body;
     """
     try:
-        resp = requests.get(
+        resp = requests.post(
             "https://overpass-api.de/api/interpreter",
-            params={"data": query},
+            data=query.encode("utf-8"),
+            headers={**REQUEST_HEADERS, "Content-Type": "text/plain; charset=utf-8"},
             timeout=40,
         )
+        resp.raise_for_status()
         return resp.json().get("elements", [])
     except Exception as exc:
         logger.error("Overpass error: %s", exc)
-        return []
+        raise RuntimeError(f"Erreur Overpass : {exc}") from exc
 
 
 def _find_email_pages_jaunes(nom: str, ville: str) -> str | None:
