@@ -1,6 +1,7 @@
 from pathlib import Path
 import dj_database_url
 from decouple import config
+from corsheaders.defaults import default_headers
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -100,6 +101,7 @@ CORS_ALLOWED_ORIGINS = config(
     default="http://localhost:5173,http://localhost:3000",
 ).split(",")
 CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = list(default_headers) + ["x-owner-token"]
 
 # DRF
 REST_FRAMEWORK = {
@@ -108,6 +110,9 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.AllowAny",
     ],
 }
+
+# Private owner access. If unset, the API keeps its local-dev open behavior.
+OWNER_ACCESS_TOKEN = config("OWNER_ACCESS_TOKEN", default="")
 
 # Email SMTP
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"

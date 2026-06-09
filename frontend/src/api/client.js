@@ -3,10 +3,26 @@ import axios from "axios";
 export const API_URL = import.meta.env.VITE_API_URL
   ?? (import.meta.env.DEV ? "/api" : "https://very-annalise-honeygroup-12ff0f9f.koyeb.app/api");
 
+const OWNER_TOKEN_KEY = "prospect_owner_token";
+
+export const getOwnerToken = () => localStorage.getItem(OWNER_TOKEN_KEY) ?? "";
+export const setOwnerToken = (token) => localStorage.setItem(OWNER_TOKEN_KEY, token);
+export const clearOwnerToken = () => localStorage.removeItem(OWNER_TOKEN_KEY);
+
 const api = axios.create({
   baseURL: API_URL,
   headers: { "Content-Type": "application/json" },
 });
+
+api.interceptors.request.use((config) => {
+  const token = getOwnerToken();
+  if (token) {
+    config.headers["X-Owner-Token"] = token;
+  }
+  return config;
+});
+
+export const getSession = () => api.get("/session/").then((r) => r.data);
 
 // ── Campaigns ─────────────────────────────────────────────────
 export const getCampaigns = () => api.get("/campaigns/").then((r) => r.data);

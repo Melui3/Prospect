@@ -1,21 +1,59 @@
+import { useEffect, useState } from "react";
 import { Outlet, NavLink } from "react-router-dom";
+import { clearOwnerToken, getSession, setOwnerToken } from "../api/client";
 
 const navItems = [
-  { to: "/dashboard", label: "Dashboard", icon: "📊" },
-  { to: "/campaigns", label: "Campagnes", icon: "🚀" },
-  { to: "/prospects", label: "Prospects", icon: "🎯" },
-  { to: "/templates", label: "Templates email", icon: "✉️" },
+  { to: "/dashboard", label: "Dashboard", icon: "DB" },
+  { to: "/campaigns", label: "Campagnes", icon: "CA" },
+  { to: "/prospects", label: "Prospects", icon: "PR" },
+  { to: "/templates", label: "Templates email", icon: "TE" },
 ];
 
 export default function Layout() {
+  const [session, setSession] = useState(null);
+  const [ownerToken, setOwnerTokenInput] = useState("");
+  const [unlockError, setUnlockError] = useState("");
+
+  useEffect(() => {
+    getSession().then(setSession).catch(() => setSession({ mode: "demo", is_owner: false }));
+  }, []);
+
+  const handleUnlock = async (event) => {
+    event.preventDefault();
+    const token = ownerToken.trim();
+    if (!token) return;
+
+    setUnlockError("");
+    setOwnerToken(token);
+
+    const nextSession = await getSession();
+    if (nextSession.is_owner) {
+      window.location.reload();
+      return;
+    }
+
+    clearOwnerToken();
+    setOwnerTokenInput("");
+    setSession(nextSession);
+    setUnlockError("Token invalide");
+  };
+
+  const handleLock = () => {
+    clearOwnerToken();
+    window.location.reload();
+  };
+
+  const isOwner = session?.is_owner;
+  const demoEnabled = session?.demo_enabled;
+
   return (
     <div className="flex min-h-screen">
-      {/* Sidebar */}
       <aside className="w-60 bg-slate-900 text-white flex flex-col">
         <div className="px-6 py-5 border-b border-slate-700">
           <h1 className="text-xl font-bold tracking-tight">ProspectApp</h1>
           <p className="text-xs text-slate-400 mt-0.5">Trouvez vos prochains clients</p>
         </div>
+
         <nav className="flex-1 px-3 py-4 space-y-1">
           {navItems.map(({ to, label, icon }) => (
             <NavLink
@@ -29,17 +67,59 @@ export default function Layout() {
                 }`
               }
             >
-              <span>{icon}</span>
+              <span className="w-6 text-[10px] font-bold tracking-wide text-center">
+                {icon}
+              </span>
               {label}
             </NavLink>
           ))}
         </nav>
-        <div className="px-6 py-4 border-t border-slate-700">
-          <span className="text-xs text-slate-500">OSM + Pages Jaunes</span>
+
+        <div className="px-4 py-4 border-t border-slate-700 space-y-3">
+          <div>
+            <p className="text-xs font-medium text-slate-200">
+              {isOwner ? "Session privee" : "Mode demo"}
+            </p>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              {isOwner ? "Donnees reelles" : "Donnees publiques fictives"}
+            </p>
+          </div>
+
+          {demoEnabled && !isOwner && (
+            <form onSubmit={handleUnlock} className="space-y-2">
+              <input
+                type="password"
+                value={ownerToken}
+                onChange={(event) => setOwnerTokenInput(event.target.value)}
+                placeholder="Token prive"
+                className="w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              {unlockError && <p className="text-[11px] text-red-300">{unlockError}</p>}
+              <button
+                type="submit"
+                className="w-full rounded bg-blue-600 px-2 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+              >
+                Deverrouiller
+              </button>
+            </form>
+          )}
+
+          {demoEnabled && isOwner && (
+            <button
+              type="button"
+              onClick={handleLock}
+              className="w-full rounded border border-slate-700 px-2 py-1.5 text-xs text-slate-300 hover:bg-slate-800"
+            >
+              Repasser en demo
+            </button>
+          )}
+
+          {!demoEnabled && (
+            <span className="text-xs text-slate-500">Acces local ouvert</span>
+          )}
         </div>
       </aside>
 
-      {/* Main content */}
       <main className="flex-1 overflow-auto">
         <Outlet />
       </main>
