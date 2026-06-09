@@ -1,7 +1,7 @@
 from django.utils import timezone
 from django.db.models import Count, Q
 from django.contrib.auth.models import User
-from rest_framework import viewsets, status
+from rest_framework import mixins, viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -58,9 +58,15 @@ class CampaignViewSet(viewsets.ModelViewSet):
 
 # ── Prospects ─────────────────────────────────────────────────
 
-class ProspectViewSet(viewsets.ModelViewSet):
+class ProspectViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
     serializer_class = ProspectSerializer
-    http_method_names = ["get", "patch", "delete"]
+    http_method_names = ["get", "post", "patch", "delete"]
 
     def get_queryset(self):
         qs = Prospect.objects.select_related("campaign").prefetch_related("email_logs")
