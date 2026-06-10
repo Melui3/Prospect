@@ -23,8 +23,8 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
-    "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -98,8 +98,9 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # CORS
 CORS_ALLOWED_ORIGINS = config(
     "CORS_ALLOWED_ORIGINS",
-    default="http://localhost:5173,http://localhost:3000",
+    default="http://localhost:5173,http://localhost:3000,https://melui3.github.io",
 ).split(",")
+CORS_ALLOWED_ORIGIN_REGEXES = [r"^https://melui3\.github\.io$"]
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = list(default_headers) + ["x-owner-token"]
 
@@ -113,6 +114,23 @@ REST_FRAMEWORK = {
 
 # Private owner access. If unset, the API keeps its local-dev open behavior.
 OWNER_ACCESS_TOKEN = config("OWNER_ACCESS_TOKEN", default="")
+
+# External scraping services
+OVERPASS_ENDPOINTS = [
+    endpoint.strip()
+    for endpoint in config(
+        "OVERPASS_ENDPOINTS",
+        default=(
+            "https://overpass-api.de/api/interpreter,"
+            "https://overpass.kumi.systems/api/interpreter"
+        ),
+    ).split(",")
+    if endpoint.strip()
+]
+OVERPASS_TIMEOUT = config("OVERPASS_TIMEOUT", default=25, cast=int)
+PAGES_JAUNES_MAX_LOOKUPS = config("PAGES_JAUNES_MAX_LOOKUPS", default=10, cast=int)
+PAGES_JAUNES_TIMEOUT = config("PAGES_JAUNES_TIMEOUT", default=3, cast=int)
+PAGES_JAUNES_DELAY_SECONDS = config("PAGES_JAUNES_DELAY_SECONDS", default=0.2, cast=float)
 
 # Email SMTP
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"

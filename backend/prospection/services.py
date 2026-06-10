@@ -9,6 +9,7 @@ import logging
 
 import requests
 from bs4 import BeautifulSoup
+from django.conf import settings
 from django.core.mail import send_mail
 from django.utils import timezone
 
@@ -58,22 +59,27 @@ def _get_city_coords(ville: str) -> tuple[str, str] | None:
 
 def _query_overpass(tag: str, lat: str, lon: str, rayon_m: int) -> list[dict]:
     query = f"""
-    [out:json][timeout:30];
+    [out:json][timeout:{settings.OVERPASS_TIMEOUT}];
     node[{tag}](around:{rayon_m},{lat},{lon});
-    out body;
+    out tags;
     """
-    try:
-        resp = requests.post(
-            "https://overpass-api.de/api/interpreter",
-            data=query.encode("utf-8"),
-            headers={**REQUEST_HEADERS, "Content-Type": "text/plain; charset=utf-8"},
-            timeout=40,
-        )
-        resp.raise_for_status()
-        return resp.json().get("elements", [])
-    except Exception as exc:
-        logger.error("Overpass error: %s", exc)
-        raise RuntimeError(f"Erreur Overpass : {exc}") from exc
+    errors = []
+
+    for endpoint in settings.OVERPASS_ENDPOINTS:
+        try:
+            resp = requests.post(
+                endpoint,
+                data=query.encode("utf-8"),
+                headers={**REQUEST_HEADERS, "Content-Type": "text/plain; charset=utf-8"},
+                timeout=settings.OVERPASS_TIMEOUT + 10,
+            )
+            resp.raise_for_status()
+            return resp.json().get("elements", [])
+        except Exception as exc:
+            logger.warning("Overpass error on %s: %s", endpoint, exc)
+            errors.append(f"{endpoint}: {exc}")
+
+    raise RuntimeError("Erreur Overpass : " + " | ".join(errors))
 
 
 def _find_email_pages_jaunes(nom: str, ville: str) -> str | None:
@@ -88,7 +94,7 @@ def _find_email_pages_jaunes(nom: str, ville: str) -> str | None:
         f"?quoiqui={requests.utils.quote(nom)}&ou={requests.utils.quote(ville)}"
     )
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = requests.get(url, headers=headers, timeout=settings.PAGES_JAUNES_TIMEOUT)
         soup = BeautifulSoup(resp.text, "html.parser")
         for link in soup.find_all("a", href=True):
             if "mailto:" in link["href"]:
@@ -116,6 +122,7 @@ def run_prospection(campaign) -> dict:
     lat, lon = coords
     rayon_m = campaign.rayon_km * 1000
     elements = _query_overpass(tag, lat, lon, rayon_m)
+    pages_jaunes_lookups_left = settings.PAGES_JAUNES_MAX_LOOKUPS
 
     created_total = 0
     created_with_email = 0
@@ -134,9 +141,11 @@ def run_prospection(campaign) -> dict:
             continue
 
         # Enrichissement Pages Jaunes si pas d'email
-        if not email:
+        if not email and pages_jaunes_lookups_left > 0:
             email = _find_email_pages_jaunes(nom, campaign.ville)
-            time.sleep(0.4)  # politesse serveur
+            pages_jaunes_lookups_left -= 1
+            if settings.PAGES_JAUNES_DELAY_SECONDS > 0:
+                time.sleep(settings.PAGES_JAUNES_DELAY_SECONDS)
 
         prospect, _ = Prospect.objects.get_or_create(
             campaign=campaign,
