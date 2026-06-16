@@ -54,8 +54,8 @@ DEMO_PROSPECTS = [
         "ville": "Rennes",
         "telephone": "+33 2 99 00 00 02",
         "email": "bonjour@maison-exemple.demo",
-        "website": None,
-        "has_website": False,
+        "website": "https://maison-exemple.demo",
+        "has_website": True,
         "status": "contacted",
         "created_at": "2026-06-09T09:19:00+02:00",
         "email_logs": [
@@ -155,6 +155,12 @@ def demo_prospects(params=None):
         prospects = [p for p in prospects if p["email"]]
     elif has_email == "false":
         prospects = [p for p in prospects if not p["email"]]
+
+    has_website = params.get("has_website")
+    if has_website == "true":
+        prospects = [p for p in prospects if p["has_website"]]
+    elif has_website == "false":
+        prospects = [p for p in prospects if not p["has_website"]]
 
     return prospects
 

@@ -17,6 +17,32 @@ const STATUS_OPTIONS = [
   { value: "ignored", label: "Ignorés" },
 ];
 
+const websiteHref = (url) =>
+  /^https?:\/\//i.test(url) ? url : `https://${url}`;
+
+const websiteLabel = (url) => {
+  try {
+    return new URL(websiteHref(url)).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+};
+
+const renderTemplateText = (text = "", prospect) => {
+  const values = {
+    nom: prospect?.nom ?? "",
+    ville: prospect?.ville ?? "",
+    secteur: prospect?.campaign_secteur ?? "",
+    website: prospect?.website ?? "",
+    site: prospect?.website ?? "",
+  };
+
+  return Object.entries(values).reduce(
+    (result, [key, value]) => result.replaceAll(`{${key}}`, value),
+    text
+  );
+};
+
 export default function Prospects() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [prospects, setProspects] = useState([]);
@@ -29,6 +55,7 @@ export default function Prospects() {
   const [filterCampaign, setFilterCampaign] = useState(searchParams.get("campaign") ?? "");
   const [filterStatus, setFilterStatus] = useState("");
   const [filterEmail, setFilterEmail] = useState("");
+  const [filterWebsite, setFilterWebsite] = useState("");
 
   // Modal d'envoi email
   const [emailModal, setEmailModal] = useState(null); // prospect
@@ -39,6 +66,7 @@ export default function Prospects() {
     if (filterCampaign) params.campaign = filterCampaign;
     if (filterStatus) params.status = filterStatus;
     if (filterEmail) params.has_email = filterEmail;
+    if (filterWebsite) params.has_website = filterWebsite;
 
     return getProspects(params)
       .then(setProspects)
@@ -55,7 +83,7 @@ export default function Prospects() {
 
   useEffect(() => {
     loadProspects();
-  }, [filterCampaign, filterStatus, filterEmail]);
+  }, [filterCampaign, filterStatus, filterEmail, filterWebsite]);
 
   const handleSendEmail = async () => {
     if (!selectedTemplate || !emailModal) return;
@@ -71,6 +99,34 @@ export default function Prospects() {
     } finally {
       setSendingId(null);
     }
+  };
+
+  const selectedTemplateData = templates.find((t) => String(t.id) === selectedTemplate);
+  const renderedSubject =
+    emailModal && selectedTemplateData
+      ? renderTemplateText(selectedTemplateData.subject, emailModal)
+      : "";
+  const renderedBody =
+    emailModal && selectedTemplateData
+      ? renderTemplateText(selectedTemplateData.body, emailModal)
+      : "";
+
+  const handleOpenGmail = () => {
+    if (!emailModal || !selectedTemplateData) return;
+
+    const params = new URLSearchParams({
+      view: "cm",
+      fs: "1",
+      to: emailModal.email,
+      su: renderedSubject,
+      body: renderedBody,
+    });
+
+    window.open(
+      `https://mail.google.com/mail/?${params.toString()}`,
+      "_blank",
+      "noopener,noreferrer"
+    );
   };
 
   const handleStatusChange = async (prospect, newStatus) => {
@@ -125,6 +181,16 @@ export default function Prospects() {
           <option value="true">Avec email</option>
           <option value="false">Sans email</option>
         </select>
+
+        <select
+          value={filterWebsite}
+          onChange={(e) => setFilterWebsite(e.target.value)}
+          className="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+        >
+          <option value="">Tous les sites</option>
+          <option value="true">Avec site</option>
+          <option value="false">Sans site</option>
+        </select>
       </div>
 
       {/* Table */}
@@ -135,13 +201,14 @@ export default function Prospects() {
           Aucun prospect trouvé. Lancez une campagne d'abord.
         </div>
       ) : (
-        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+          <table className="w-full min-w-[1200px] text-sm">
             <thead className="bg-slate-50 text-slate-500 uppercase text-xs">
               <tr>
                 <th className="px-4 py-3 text-left">Nom</th>
                 <th className="px-4 py-3 text-left">Ville</th>
                 <th className="px-4 py-3 text-left">Email</th>
+                <th className="px-4 py-3 text-left">Site</th>
                 <th className="px-4 py-3 text-left">Téléphone</th>
                 <th className="px-4 py-3 text-left">Secteur</th>
                 <th className="px-4 py-3 text-left">Statut</th>
@@ -164,6 +231,20 @@ export default function Prospects() {
                       </a>
                     ) : (
                       <span className="text-slate-300 text-xs">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {p.website ? (
+                      <a
+                        href={websiteHref(p.website)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-blue-600 hover:underline text-xs"
+                      >
+                        {websiteLabel(p.website)}
+                      </a>
+                    ) : (
+                      <span className="text-slate-300 text-xs">Sans site</span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-slate-500 text-xs">
@@ -222,6 +303,19 @@ export default function Prospects() {
               Destinataire :{" "}
               <span className="font-medium text-slate-700">{emailModal.email}</span>
             </p>
+            {emailModal.website && (
+              <p className="text-sm text-slate-500">
+                Site :{" "}
+                <a
+                  href={websiteHref(emailModal.website)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-medium text-blue-600 hover:underline"
+                >
+                  {websiteLabel(emailModal.website)}
+                </a>
+              </p>
+            )}
 
             {templates.length === 0 ? (
               <p className="text-sm text-orange-600 bg-orange-50 rounded-lg p-3">
@@ -246,29 +340,30 @@ export default function Prospects() {
                 {selectedTemplate && (
                   <div className="mt-3 p-3 bg-slate-50 rounded-lg text-xs text-slate-500">
                     <p className="font-medium text-slate-600 mb-1">Aperçu sujet :</p>
-                    <p>
-                      {templates
-                        .find((t) => String(t.id) === selectedTemplate)
-                        ?.subject.replace("{nom}", emailModal.nom)
-                        .replace("{ville}", emailModal.ville)
-                        .replace("{secteur}", emailModal.campaign_secteur)}
-                    </p>
+                    <p>{renderedSubject}</p>
                   </div>
                 )}
               </div>
             )}
 
-            <div className="flex gap-3 pt-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+              <button
+                onClick={handleOpenGmail}
+                disabled={!selectedTemplate || !emailModal.email}
+                className="border border-slate-200 hover:bg-slate-50 disabled:opacity-50 py-2 rounded-lg text-sm text-slate-700 transition-colors"
+              >
+                Ouvrir Gmail
+              </button>
               <button
                 onClick={handleSendEmail}
                 disabled={!selectedTemplate || sendingId === emailModal.id}
-                className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white py-2 rounded-lg text-sm font-medium transition-colors"
+                className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white py-2 rounded-lg text-sm font-medium transition-colors"
               >
                 {sendingId === emailModal.id ? "Envoi en cours…" : "Envoyer"}
               </button>
               <button
                 onClick={() => setEmailModal(null)}
-                className="flex-1 border border-slate-200 hover:bg-slate-50 py-2 rounded-lg text-sm text-slate-600 transition-colors"
+                className="border border-slate-200 hover:bg-slate-50 py-2 rounded-lg text-sm text-slate-600 transition-colors"
               >
                 Annuler
               </button>

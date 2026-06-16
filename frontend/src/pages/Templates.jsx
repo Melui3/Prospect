@@ -89,6 +89,9 @@ export default function Templates() {
       {/* Variables help */}
       <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
         <pre className="text-xs text-blue-700 whitespace-pre-wrap">{HELP_TEXT}</pre>
+        <p className="text-xs text-blue-700 mt-2">
+          {"{website} -> Site web du prospect, utile pour les emails de refonte."}
+        </p>
       </div>
 
       {/* Form */}

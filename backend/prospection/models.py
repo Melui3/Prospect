@@ -64,7 +64,7 @@ class EmailTemplate(models.Model):
     name = models.CharField(max_length=100)
     subject = models.CharField(max_length=200)
     body = models.TextField(
-        help_text="Variables disponibles : {nom}, {ville}, {secteur}"
+        help_text="Variables disponibles : {nom}, {ville}, {secteur}, {website}"
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -81,6 +81,8 @@ class EmailTemplate(models.Model):
             "nom": prospect.nom,
             "ville": prospect.ville or prospect.campaign.ville,
             "secteur": prospect.campaign.secteur,
+            "website": prospect.website or "",
+            "site": prospect.website or "",
         }
         subject = self.subject.format(**context)
         body = self.body.format(**context)
