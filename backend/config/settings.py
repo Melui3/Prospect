@@ -117,7 +117,6 @@ OWNER_ACCESS_TOKEN = config("OWNER_ACCESS_TOKEN", default="")
 
 # External scraping services
 DEFAULT_OVERPASS_ENDPOINTS = [
-    "https://overpass.osm.ch/api/interpreter",
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
 ]

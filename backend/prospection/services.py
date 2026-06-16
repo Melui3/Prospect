@@ -190,6 +190,7 @@ def _query_overpass_filter(
     out tags;
     """
     errors = []
+    had_empty_response = False
 
     for endpoint in settings.OVERPASS_ENDPOINTS:
         remaining_seconds = deadline - time.monotonic()
@@ -204,10 +205,18 @@ def _query_overpass_filter(
                 timeout=max(1, min(settings.OVERPASS_TIMEOUT + 5, remaining_seconds)),
             )
             resp.raise_for_status()
-            return resp.json().get("elements", [])
+            elements = resp.json().get("elements", [])
+            if elements:
+                return elements
+
+            had_empty_response = True
+            logger.info("Overpass empty result on %s; trying next mirror", endpoint)
         except Exception as exc:
             logger.warning("Overpass error on %s: %s", endpoint, exc)
             errors.append(f"{endpoint}: {exc}")
+
+    if had_empty_response:
+        return []
 
     raise RuntimeError("Erreur Overpass : " + " | ".join(errors))
 
