@@ -7,6 +7,7 @@ const SECTEURS = [
   "boulangerie","restaurant","coiffeur","pharmacie","plombier",
   "electricien","garage","fleuriste","epicerie","opticien",
   "dentiste","veterinaire","avocat","comptable","architecte",
+  "association",
 ];
 
 export default function Campaigns() {

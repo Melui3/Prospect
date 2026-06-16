@@ -128,7 +128,12 @@ OVERPASS_ENDPOINTS = [
     if endpoint.strip()
 ]
 OVERPASS_TIMEOUT = config("OVERPASS_TIMEOUT", default=25, cast=int)
-PAGES_JAUNES_MAX_LOOKUPS = config("PAGES_JAUNES_MAX_LOOKUPS", default=10, cast=int)
+OVERPASS_TOTAL_TIMEOUT = config("OVERPASS_TOTAL_TIMEOUT", default=45, cast=int)
+ENRICHMENT_TOTAL_TIMEOUT = config("ENRICHMENT_TOTAL_TIMEOUT", default=70, cast=int)
+WEBSITE_EMAIL_MAX_LOOKUPS = config("WEBSITE_EMAIL_MAX_LOOKUPS", default=30, cast=int)
+WEBSITE_EMAIL_MAX_PAGES = config("WEBSITE_EMAIL_MAX_PAGES", default=3, cast=int)
+WEBSITE_EMAIL_TIMEOUT = config("WEBSITE_EMAIL_TIMEOUT", default=4, cast=int)
+PAGES_JAUNES_MAX_LOOKUPS = config("PAGES_JAUNES_MAX_LOOKUPS", default=30, cast=int)
 PAGES_JAUNES_TIMEOUT = config("PAGES_JAUNES_TIMEOUT", default=3, cast=int)
 PAGES_JAUNES_DELAY_SECONDS = config("PAGES_JAUNES_DELAY_SECONDS", default=0.2, cast=float)
 
