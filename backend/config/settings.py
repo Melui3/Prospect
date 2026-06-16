@@ -116,17 +116,19 @@ REST_FRAMEWORK = {
 OWNER_ACCESS_TOKEN = config("OWNER_ACCESS_TOKEN", default="")
 
 # External scraping services
-OVERPASS_ENDPOINTS = [
+DEFAULT_OVERPASS_ENDPOINTS = [
+    "https://overpass.osm.ch/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+]
+CONFIGURED_OVERPASS_ENDPOINTS = [
     endpoint.strip()
-    for endpoint in config(
-        "OVERPASS_ENDPOINTS",
-        default=(
-            "https://overpass-api.de/api/interpreter,"
-            "https://overpass.kumi.systems/api/interpreter"
-        ),
-    ).split(",")
+    for endpoint in config("OVERPASS_ENDPOINTS", default="").split(",")
     if endpoint.strip()
 ]
+OVERPASS_ENDPOINTS = list(
+    dict.fromkeys(DEFAULT_OVERPASS_ENDPOINTS + CONFIGURED_OVERPASS_ENDPOINTS)
+)
 OVERPASS_TIMEOUT = config("OVERPASS_TIMEOUT", default=25, cast=int)
 OVERPASS_TOTAL_TIMEOUT = config("OVERPASS_TOTAL_TIMEOUT", default=45, cast=int)
 ENRICHMENT_TOTAL_TIMEOUT = config("ENRICHMENT_TOTAL_TIMEOUT", default=70, cast=int)

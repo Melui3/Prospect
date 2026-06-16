@@ -42,6 +42,11 @@ export default function Campaigns() {
     setLaunching(id);
     try {
       const result = await launchCampaign(id);
+      if (result.status === "error" || result.error) {
+        alert(`Erreur : ${result.error ?? "Prospection interrompue."}`);
+        load();
+        return;
+      }
       alert(`✅ Terminé ! ${result.total_found} prospects trouvés (${result.with_email} avec email)`);
       load();
     } catch (err) {

@@ -13,7 +13,7 @@ from .serializers import (
     ProspectSerializer,
     EmailTemplateSerializer,
 )
-from .services import run_prospection, send_prospect_email
+from .services import ProspectionTemporaryError, run_prospection, send_prospect_email
 from .demo import (
     demo_campaign,
     demo_campaigns,
@@ -132,6 +132,18 @@ class CampaignViewSet(viewsets.ModelViewSet):
                     "message": "Prospection terminée.",
                     "total_found": stats["total"],
                     "with_email": stats["with_email"],
+                }
+            )
+        except ProspectionTemporaryError as exc:
+            campaign.status = "error"
+            campaign.error_message = str(exc)
+            campaign.save(update_fields=["status", "error_message"])
+            return Response(
+                {
+                    "status": "error",
+                    "error": str(exc),
+                    "total_found": campaign.total_prospects,
+                    "with_email": campaign.prospects_with_email,
                 }
             )
         except Exception as exc:

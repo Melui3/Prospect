@@ -90,6 +90,10 @@ SOCIAL_RESULT_STOPWORDS = {
 class SocialSearchRateLimited(RuntimeError):
     pass
 
+
+class ProspectionTemporaryError(RuntimeError):
+    pass
+
 # ── Tags OSM connus ────────────────────────────────────────────
 OSM_TAGS = {
     "boulangerie": '"shop"="bakery"',
@@ -108,11 +112,11 @@ OSM_TAGS = {
     "comptable": '"office"="accountant"',
     "architecte": '"office"="architect"',
     "association": [
-        '"operator:type"="association"',
-        '"amenity"="community_centre"',
-        '"club"',
         '"office"="association"',
+        '"club"',
+        '"amenity"="community_centre"',
         '"amenity"="social_facility"',
+        '"operator:type"="association"',
     ],
 }
 
@@ -159,7 +163,11 @@ def _query_overpass(tag_filters: str | list[str], lat: str, lon: str, rayon_m: i
         return list(elements_by_key.values())
 
     if errors:
-        raise RuntimeError("Erreur Overpass : " + " | ".join(errors))
+        logger.warning("Overpass unavailable: %s", " | ".join(errors))
+        raise ProspectionTemporaryError(
+            "OpenStreetMap/Overpass ne repond pas pour le moment. "
+            "Reessaie dans quelques minutes, ou baisse le rayon de la campagne."
+        )
 
     return []
 
