@@ -35,6 +35,8 @@ const renderTemplateText = (text = "", prospect) => {
     secteur: prospect?.campaign_secteur ?? "",
     website: prospect?.website ?? "",
     site: prospect?.website ?? "",
+    social: prospect?.social_url ?? "",
+    social_platform: prospect?.social_platform ?? "",
   };
 
   return Object.entries(values).reduce(
@@ -56,6 +58,7 @@ export default function Prospects() {
   const [filterStatus, setFilterStatus] = useState("");
   const [filterEmail, setFilterEmail] = useState("");
   const [filterWebsite, setFilterWebsite] = useState("");
+  const [filterSocial, setFilterSocial] = useState("");
 
   // Modal d'envoi email
   const [emailModal, setEmailModal] = useState(null); // prospect
@@ -67,6 +70,7 @@ export default function Prospects() {
     if (filterStatus) params.status = filterStatus;
     if (filterEmail) params.has_email = filterEmail;
     if (filterWebsite) params.has_website = filterWebsite;
+    if (filterSocial) params.has_social = filterSocial;
 
     return getProspects(params)
       .then(setProspects)
@@ -83,7 +87,7 @@ export default function Prospects() {
 
   useEffect(() => {
     loadProspects();
-  }, [filterCampaign, filterStatus, filterEmail, filterWebsite]);
+  }, [filterCampaign, filterStatus, filterEmail, filterWebsite, filterSocial]);
 
   const handleSendEmail = async () => {
     if (!selectedTemplate || !emailModal) return;
@@ -191,6 +195,16 @@ export default function Prospects() {
           <option value="true">Avec site</option>
           <option value="false">Sans site</option>
         </select>
+
+        <select
+          value={filterSocial}
+          onChange={(e) => setFilterSocial(e.target.value)}
+          className="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+        >
+          <option value="">Tous les reseaux</option>
+          <option value="true">Avec reseau</option>
+          <option value="false">Sans reseau</option>
+        </select>
       </div>
 
       {/* Table */}
@@ -202,13 +216,14 @@ export default function Prospects() {
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
-          <table className="w-full min-w-[1200px] text-sm">
+          <table className="w-full min-w-[1320px] text-sm">
             <thead className="bg-slate-50 text-slate-500 uppercase text-xs">
               <tr>
                 <th className="px-4 py-3 text-left">Nom</th>
                 <th className="px-4 py-3 text-left">Ville</th>
                 <th className="px-4 py-3 text-left">Email</th>
                 <th className="px-4 py-3 text-left">Site</th>
+                <th className="px-4 py-3 text-left">Reseau</th>
                 <th className="px-4 py-3 text-left">Téléphone</th>
                 <th className="px-4 py-3 text-left">Secteur</th>
                 <th className="px-4 py-3 text-left">Statut</th>
@@ -245,6 +260,20 @@ export default function Prospects() {
                       </a>
                     ) : (
                       <span className="text-slate-300 text-xs">Sans site</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {p.social_url ? (
+                      <a
+                        href={websiteHref(p.social_url)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-blue-600 hover:underline text-xs"
+                      >
+                        {p.social_platform || websiteLabel(p.social_url)}
+                      </a>
+                    ) : (
+                      <span className="text-slate-300 text-xs">-</span>
                     )}
                   </td>
                   <td className="px-4 py-3 text-slate-500 text-xs">
@@ -313,6 +342,19 @@ export default function Prospects() {
                   className="font-medium text-blue-600 hover:underline"
                 >
                   {websiteLabel(emailModal.website)}
+                </a>
+              </p>
+            )}
+            {emailModal.social_url && (
+              <p className="text-sm text-slate-500">
+                Reseau :{" "}
+                <a
+                  href={websiteHref(emailModal.social_url)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-medium text-blue-600 hover:underline"
+                >
+                  {emailModal.social_platform || websiteLabel(emailModal.social_url)}
                 </a>
               </p>
             )}

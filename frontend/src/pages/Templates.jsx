@@ -92,6 +92,9 @@ export default function Templates() {
         <p className="text-xs text-blue-700 mt-2">
           {"{website} -> Site web du prospect, utile pour les emails de refonte."}
         </p>
+        <p className="text-xs text-blue-700 mt-1">
+          {"{social} / {social_platform} -> Presence Facebook, Instagram, LinkedIn, etc."}
+        </p>
       </div>
 
       {/* Form */}
