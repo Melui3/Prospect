@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { Outlet, NavLink } from "react-router-dom";
-import { clearOwnerToken, getSession, setOwnerToken } from "../api/client";
+import {
+  clearOwnerApiFailed,
+  clearOwnerToken,
+  getOwnerApiFailed,
+  getSession,
+  setOwnerToken,
+} from "../api/client";
 
 const navItems = [
   { to: "/dashboard", label: "Dashboard", icon: "DB" },
@@ -12,6 +18,7 @@ const navItems = [
 export default function Layout() {
   const [session, setSession] = useState(null);
   const [unlockError, setUnlockError] = useState("");
+  const [ownerApiFailed, setOwnerApiFailed] = useState(getOwnerApiFailed());
 
   useEffect(() => {
     getSession().then(setSession).catch(() => setSession({ mode: "demo", is_owner: false }));
@@ -23,6 +30,8 @@ export default function Layout() {
     if (!trimmedToken) return;
 
     setUnlockError("");
+    clearOwnerApiFailed();
+    setOwnerApiFailed("");
     setOwnerToken(trimmedToken);
 
     try {
@@ -43,6 +52,7 @@ export default function Layout() {
   };
 
   const handleLock = () => {
+    clearOwnerApiFailed();
     clearOwnerToken();
     window.location.reload();
   };
@@ -105,6 +115,11 @@ export default function Layout() {
 
           {demoEnabled && !isOwner && (
             <div className="space-y-2">
+              {ownerApiFailed && (
+                <p className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] leading-snug text-amber-100">
+                  {ownerApiFailed}
+                </p>
+              )}
               {unlockError && <p className="text-[11px] text-red-300">{unlockError}</p>}
               <button
                 type="button"
