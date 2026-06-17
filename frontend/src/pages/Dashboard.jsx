@@ -4,18 +4,45 @@ import { getStats, getCampaigns } from "../api/client";
 import StatCard from "../components/StatCard";
 import Badge from "../components/Badge";
 
+const EMPTY_STATS = {
+  done_campaigns: 0,
+  total_campaigns: 0,
+  total_prospects: 0,
+  prospects_with_email: 0,
+  emails_sent: 0,
+  prospects_contacted: 0,
+  prospects_replied: 0,
+};
+
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
   const [campaigns, setCampaigns] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
+    let isMounted = true;
+
     Promise.all([getStats(), getCampaigns()])
       .then(([s, c]) => {
+        if (!isMounted) return;
         setStats(s);
         setCampaigns(c.slice(0, 5));
       })
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        console.error("Dashboard load error", err);
+        if (!isMounted) return;
+        setStats(EMPTY_STATS);
+        setCampaigns([]);
+        setError("Impossible de charger les donnees du dashboard.");
+      })
+      .finally(() => {
+        if (isMounted) setLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   if (loading) {
@@ -32,6 +59,12 @@ export default function Dashboard() {
         <h2 className="text-2xl font-bold text-slate-800">Dashboard</h2>
         <p className="text-slate-500 text-sm mt-1">Vue d'ensemble de votre prospection</p>
       </div>
+
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
