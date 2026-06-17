@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { getCampaigns, createCampaign, deleteCampaign, launchCampaign } from "../api/client";
+import {
+  getCampaigns,
+  createCampaign,
+  deleteCampaign,
+  getSession,
+  launchCampaign,
+} from "../api/client";
 import Badge from "../components/Badge";
 
 const SECTEURS = [
@@ -17,6 +23,8 @@ export default function Campaigns() {
   const [loading, setLoading] = useState(true);
   const [launching, setLaunching] = useState(null);
   const [error, setError] = useState("");
+  const [session, setSession] = useState(null);
+  const isDemoMode = session?.demo_enabled && !session?.is_owner;
 
   const load = () =>
     getCampaigns()
@@ -30,11 +38,20 @@ export default function Campaigns() {
       })
       .finally(() => setLoading(false));
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    getSession()
+      .then(setSession)
+      .catch(() => setSession({ demo_enabled: true, is_owner: false }));
+  }, []);
 
   const handleCreate = async (e) => {
     e.preventDefault();
     setError("");
+    if (isDemoMode) {
+      setError("Mode demo actif : clique sur Acces prive dans la sidebar pour creer une vraie campagne.");
+      return;
+    }
     try {
       await createCampaign(form);
       setShowForm(false);
@@ -46,6 +63,14 @@ export default function Campaigns() {
   };
 
   const handleLaunch = async (id) => {
+    setError("");
+    if (isDemoMode) {
+      const msg = "Mode demo actif : clique sur Acces prive dans la sidebar pour lancer une vraie campagne.";
+      setError(msg);
+      alert(msg);
+      return;
+    }
+
     setLaunching(id);
     try {
       const result = await launchCampaign(id);
@@ -66,6 +91,11 @@ export default function Campaigns() {
   };
 
   const handleDelete = async (id) => {
+    setError("");
+    if (isDemoMode) {
+      setError("Mode demo actif : clique sur Acces prive dans la sidebar pour supprimer une vraie campagne.");
+      return;
+    }
     if (!confirm("Supprimer cette campagne et tous ses prospects ?")) return;
     try {
       await deleteCampaign(id);
@@ -92,6 +122,12 @@ export default function Campaigns() {
       </div>
 
       {/* Formulaire création */}
+      {isDemoMode && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          Mode demo actif : les campagnes affichees sont fictives. Clique sur Acces prive dans la sidebar pour lancer tes vraies campagnes.
+        </div>
+      )}
+
       {error && !showForm && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {error}
