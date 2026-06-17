@@ -222,12 +222,6 @@ class ProspectViewSet(
         elif has_website == "false":
             qs = qs.filter(Q(has_website=False) | Q(website=None) | Q(website=""))
 
-        has_social = self.request.query_params.get("has_social")
-        if has_social == "true":
-            qs = qs.exclude(social_url=None).exclude(social_url="")
-        elif has_social == "false":
-            qs = qs.filter(Q(social_url=None) | Q(social_url=""))
-
         return qs
 
     @action(detail=True, methods=["post"], url_path="send-email")

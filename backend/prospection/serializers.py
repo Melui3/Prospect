@@ -26,8 +26,6 @@ class ProspectSerializer(serializers.ModelSerializer):
             "email",
             "website",
             "has_website",
-            "social_url",
-            "social_platform",
             "status",
             "created_at",
             "email_logs",

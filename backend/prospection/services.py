@@ -591,7 +591,6 @@ def run_prospection(campaign) -> dict:
     elements = _query_overpass(tag, lat, lon, rayon_m)
     enrichment_deadline = time.monotonic() + settings.ENRICHMENT_TOTAL_TIMEOUT
     website_email_lookups_left = settings.WEBSITE_EMAIL_MAX_LOOKUPS
-    social_search_lookups_left = settings.SOCIAL_SEARCH_MAX_LOOKUPS
     pages_jaunes_lookups_left = settings.PAGES_JAUNES_MAX_LOOKUPS
 
     created_total = 0
@@ -605,7 +604,6 @@ def run_prospection(campaign) -> dict:
 
         website = tags.get("website") or tags.get("contact:website") or None
         email = tags.get("email") or tags.get("contact:email") or None
-        social_url, social_platform = _find_social_from_tags(tags)
 
         if (
             not email
@@ -619,20 +617,6 @@ def run_prospection(campaign) -> dict:
         # On garde les structures avec site uniquement si le site donne un email.
         if website and not email:
             continue
-
-        if (
-            not website
-            and not social_url
-            and social_search_lookups_left > 0
-            and time.monotonic() < enrichment_deadline
-        ):
-            try:
-                social_url, social_platform = _find_social_web(nom, campaign.ville)
-            except SocialSearchRateLimited:
-                logger.info("Social search rate limited; disabling for this campaign")
-                social_search_lookups_left = 0
-            else:
-                social_search_lookups_left -= 1
 
         # Enrichissement Pages Jaunes si pas d'email
         if (
@@ -657,8 +641,6 @@ def run_prospection(campaign) -> dict:
                 "email": email or None,
                 "website": website,
                 "has_website": bool(website),
-                "social_url": social_url,
-                "social_platform": social_platform,
             },
         )
 
@@ -674,10 +656,6 @@ def run_prospection(campaign) -> dict:
             if telephone and not prospect.telephone:
                 prospect.telephone = telephone
                 update_fields.append("telephone")
-            if social_url and not prospect.social_url:
-                prospect.social_url = social_url
-                prospect.social_platform = social_platform
-                update_fields.extend(["social_url", "social_platform"])
             if update_fields:
                 prospect.save(update_fields=update_fields)
 

@@ -50,8 +50,6 @@ class Prospect(models.Model):
     email = models.EmailField(blank=True, null=True)
     website = models.URLField(max_length=500, blank=True, null=True)
     has_website = models.BooleanField(default=False)
-    social_url = models.URLField(max_length=500, blank=True, null=True)
-    social_platform = models.CharField(max_length=50, blank=True, default="")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="new")
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -68,7 +66,7 @@ class EmailTemplate(models.Model):
     body = models.TextField(
         help_text=(
             "Variables disponibles : {nom}, {ville}, {secteur}, "
-            "{website}, {social}, {social_platform}"
+            "{website}"
         )
     )
     created_at = models.DateTimeField(auto_now_add=True)
@@ -88,8 +86,8 @@ class EmailTemplate(models.Model):
             "secteur": prospect.campaign.secteur,
             "website": prospect.website or "",
             "site": prospect.website or "",
-            "social": prospect.social_url or "",
-            "social_platform": prospect.social_platform or "",
+            "social": "",
+            "social_platform": "",
         }
         subject = self.subject.format(**context)
         body = self.body.format(**context)

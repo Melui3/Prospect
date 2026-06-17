@@ -40,8 +40,6 @@ DEMO_PROSPECTS = [
         "email": "contact@demo-comptoir.example",
         "website": None,
         "has_website": False,
-        "social_url": "https://www.instagram.com/demo_comptoir",
-        "social_platform": "Instagram",
         "status": "new",
         "created_at": "2026-06-09T09:18:00+02:00",
         "email_logs": [],
@@ -58,8 +56,6 @@ DEMO_PROSPECTS = [
         "email": "bonjour@maison-exemple.demo",
         "website": "https://maison-exemple.demo",
         "has_website": True,
-        "social_url": "https://www.facebook.com/maison.exemple",
-        "social_platform": "Facebook",
         "status": "contacted",
         "created_at": "2026-06-09T09:19:00+02:00",
         "email_logs": [
@@ -85,8 +81,6 @@ DEMO_PROSPECTS = [
         "email": None,
         "website": None,
         "has_website": False,
-        "social_url": None,
-        "social_platform": "",
         "status": "new",
         "created_at": "2026-06-09T09:20:00+02:00",
         "email_logs": [],
@@ -103,8 +97,6 @@ DEMO_PROSPECTS = [
         "email": "fournil@demo.example",
         "website": None,
         "has_website": False,
-        "social_url": None,
-        "social_platform": "",
         "status": "replied",
         "created_at": "2026-06-08T14:22:00+02:00",
         "email_logs": [
@@ -169,12 +161,6 @@ def demo_prospects(params=None):
         prospects = [p for p in prospects if p["has_website"]]
     elif has_website == "false":
         prospects = [p for p in prospects if not p["has_website"]]
-
-    has_social = params.get("has_social")
-    if has_social == "true":
-        prospects = [p for p in prospects if p["social_url"]]
-    elif has_social == "false":
-        prospects = [p for p in prospects if not p["social_url"]]
 
     return prospects
 
