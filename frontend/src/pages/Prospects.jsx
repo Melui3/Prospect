@@ -78,11 +78,17 @@ export default function Prospects() {
   };
 
   useEffect(() => {
-    Promise.all([getCampaigns(), getTemplates()]).then(([c, t]) => {
-      setCampaigns(c);
-      setTemplates(t);
-      if (t.length > 0) setSelectedTemplate(String(t[0].id));
-    });
+    Promise.all([getCampaigns(), getTemplates()])
+      .then(([c, t]) => {
+        setCampaigns(c);
+        setTemplates(t);
+        if (t.length > 0) setSelectedTemplate(String(t[0].id));
+      })
+      .catch((err) => {
+        console.error("Prospects setup load error", err);
+        setCampaigns([]);
+        setTemplates([]);
+      });
   }, []);
 
   useEffect(() => {
