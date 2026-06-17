@@ -11,20 +11,19 @@ const navItems = [
 
 export default function Layout() {
   const [session, setSession] = useState(null);
-  const [ownerToken, setOwnerTokenInput] = useState("");
   const [unlockError, setUnlockError] = useState("");
 
   useEffect(() => {
     getSession().then(setSession).catch(() => setSession({ mode: "demo", is_owner: false }));
   }, []);
 
-  const handleUnlock = async (event) => {
-    event.preventDefault();
-    const token = ownerToken.trim();
-    if (!token) return;
+  const handleUnlock = async () => {
+    const token = window.prompt("Token prive");
+    const trimmedToken = token?.trim();
+    if (!trimmedToken) return;
 
     setUnlockError("");
-    setOwnerToken(token);
+    setOwnerToken(trimmedToken);
 
     try {
       const nextSession = await getSession();
@@ -34,7 +33,6 @@ export default function Layout() {
       }
 
       clearOwnerToken();
-      setOwnerTokenInput("");
       setSession(nextSession);
       setUnlockError("Token invalide");
     } catch (err) {
@@ -106,29 +104,16 @@ export default function Layout() {
           </div>
 
           {demoEnabled && !isOwner && (
-            <form onSubmit={handleUnlock} className="space-y-2">
-              <input
-                type="search"
-                value={ownerToken}
-                onChange={(event) => setOwnerTokenInput(event.target.value)}
-                placeholder="Token prive"
-                autoComplete="off"
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                data-lpignore="true"
-                data-1p-ignore="true"
-                data-form-type="other"
-                className="w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+            <div className="space-y-2">
               {unlockError && <p className="text-[11px] text-red-300">{unlockError}</p>}
               <button
-                type="submit"
+                type="button"
+                onClick={handleUnlock}
                 className="w-full rounded bg-blue-600 px-2 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
               >
-                Deverrouiller
+                Acces prive
               </button>
-            </form>
+            </div>
           )}
 
           {demoEnabled && isOwner && (
