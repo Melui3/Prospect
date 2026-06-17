@@ -1,4 +1,8 @@
+import logging
+import threading
+
 from django.conf import settings
+from django.db import close_old_connections
 from django.utils import timezone
 from django.db.models import Count, Q
 from django.contrib.auth.models import User
@@ -23,6 +27,38 @@ from .demo import (
     demo_template,
     demo_templates,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def start_campaign_worker(campaign_id):
+    thread = threading.Thread(
+        target=_run_campaign_worker,
+        args=(campaign_id,),
+        daemon=True,
+        name=f"campaign-{campaign_id}-prospection",
+    )
+    thread.start()
+
+
+def _run_campaign_worker(campaign_id):
+    close_old_connections()
+    try:
+        campaign = Campaign.objects.get(pk=campaign_id)
+        try:
+            run_prospection(campaign)
+            campaign.status = "done"
+            campaign.error_message = ""
+            campaign.save(update_fields=["status", "error_message"])
+        except Exception as exc:
+            logger.exception("Campaign %s prospection failed", campaign_id)
+            campaign.status = "error"
+            campaign.error_message = str(exc)
+            campaign.save(update_fields=["status", "error_message"])
+    except Exception:
+        logger.exception("Campaign %s worker failed before completion", campaign_id)
+    finally:
+        close_old_connections()
 
 
 def is_owner_request(request):
@@ -122,6 +158,15 @@ class CampaignViewSet(viewsets.ModelViewSet):
         campaign.launched_at = timezone.now()
         campaign.error_message = ""
         campaign.save(update_fields=["status", "launched_at", "error_message"])
+
+        start_campaign_worker(campaign.id)
+        return Response(
+            {
+                "message": "Prospection lancee.",
+                "status": "running",
+                "campaign_id": campaign.id,
+            }
+        )
 
         try:
             stats = run_prospection(campaign)

@@ -74,6 +74,13 @@ export default function Campaigns() {
     setLaunching(id);
     try {
       const result = await launchCampaign(id);
+      if (result.status === "running") {
+        alert("Prospection lancee. Les resultats vont arriver dans quelques instants.");
+        load();
+        setTimeout(load, 5000);
+        setTimeout(load, 15000);
+        return;
+      }
       if (result.status === "error" || result.error) {
         alert(`Erreur : ${result.error ?? "Prospection interrompue."}`);
         load();
