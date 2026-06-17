@@ -26,16 +26,22 @@ export default function Layout() {
     setUnlockError("");
     setOwnerToken(token);
 
-    const nextSession = await getSession();
-    if (nextSession.is_owner) {
-      window.location.reload();
-      return;
-    }
+    try {
+      const nextSession = await getSession();
+      if (nextSession.is_owner) {
+        window.location.reload();
+        return;
+      }
 
-    clearOwnerToken();
-    setOwnerTokenInput("");
-    setSession(nextSession);
-    setUnlockError("Token invalide");
+      clearOwnerToken();
+      setOwnerTokenInput("");
+      setSession(nextSession);
+      setUnlockError("Token invalide");
+    } catch (err) {
+      console.error("Owner token validation error", err);
+      clearOwnerToken();
+      setUnlockError("Validation impossible pour le moment");
+    }
   };
 
   const handleLock = () => {
@@ -102,10 +108,17 @@ export default function Layout() {
           {demoEnabled && !isOwner && (
             <form onSubmit={handleUnlock} className="space-y-2">
               <input
-                type="password"
+                type="search"
                 value={ownerToken}
                 onChange={(event) => setOwnerTokenInput(event.target.value)}
                 placeholder="Token prive"
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                data-lpignore="true"
+                data-1p-ignore="true"
+                data-form-type="other"
                 className="w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
               {unlockError && <p className="text-[11px] text-red-300">{unlockError}</p>}
