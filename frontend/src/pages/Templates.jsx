@@ -29,10 +29,19 @@ export default function Templates() {
   const [editing, setEditing] = useState(null); // null | "new" | {id, ...}
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
   const load = () =>
     getTemplates()
-      .then(setTemplates)
+      .then((data) => {
+        setTemplates(data);
+        setError("");
+      })
+      .catch((err) => {
+        console.error("Templates load error", err);
+        setTemplates([]);
+        setError("Impossible de charger les templates.");
+      })
       .finally(() => setLoading(false));
 
   useEffect(() => { load(); }, []);
@@ -58,6 +67,9 @@ export default function Templates() {
       }
       setEditing(null);
       load();
+    } catch (err) {
+      console.error("Template save error", err);
+      setError("Impossible de sauvegarder ce template.");
     } finally {
       setSaving(false);
     }
@@ -65,8 +77,13 @@ export default function Templates() {
 
   const handleDelete = async (id) => {
     if (!confirm("Supprimer ce template ?")) return;
-    await deleteTemplate(id);
-    load();
+    try {
+      await deleteTemplate(id);
+      load();
+    } catch (err) {
+      console.error("Template delete error", err);
+      setError("Impossible de supprimer ce template.");
+    }
   };
 
   return (
@@ -85,6 +102,12 @@ export default function Templates() {
           + Nouveau template
         </button>
       </div>
+
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
 
       {/* Variables help */}
       <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">

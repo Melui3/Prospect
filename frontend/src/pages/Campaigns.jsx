@@ -20,7 +20,14 @@ export default function Campaigns() {
 
   const load = () =>
     getCampaigns()
-      .then(setCampaigns)
+      .then((data) => {
+        setCampaigns(data);
+      })
+      .catch((err) => {
+        console.error("Campaigns load error", err);
+        setCampaigns([]);
+        setError("Impossible de charger les campagnes.");
+      })
       .finally(() => setLoading(false));
 
   useEffect(() => { load(); }, []);
@@ -60,8 +67,13 @@ export default function Campaigns() {
 
   const handleDelete = async (id) => {
     if (!confirm("Supprimer cette campagne et tous ses prospects ?")) return;
-    await deleteCampaign(id);
-    load();
+    try {
+      await deleteCampaign(id);
+      load();
+    } catch (err) {
+      console.error("Campaign delete error", err);
+      setError("Impossible de supprimer cette campagne.");
+    }
   };
 
   return (
@@ -80,6 +92,12 @@ export default function Campaigns() {
       </div>
 
       {/* Formulaire création */}
+      {error && !showForm && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
       {showForm && (
         <form
           onSubmit={handleCreate}

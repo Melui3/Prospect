@@ -151,7 +151,12 @@ class CampaignViewSet(viewsets.ModelViewSet):
             campaign.error_message = str(exc)
             campaign.save(update_fields=["status", "error_message"])
             return Response(
-                {"error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {
+                    "status": "error",
+                    "error": str(exc),
+                    "total_found": campaign.total_prospects,
+                    "with_email": campaign.prospects_with_email,
+                }
             )
 
 

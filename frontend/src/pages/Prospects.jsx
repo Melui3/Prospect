@@ -52,6 +52,7 @@ export default function Prospects() {
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [sendingId, setSendingId] = useState(null);
+  const [error, setError] = useState("");
 
   // Filtres
   const [filterCampaign, setFilterCampaign] = useState(searchParams.get("campaign") ?? "");
@@ -73,7 +74,15 @@ export default function Prospects() {
     if (filterSocial) params.has_social = filterSocial;
 
     return getProspects(params)
-      .then(setProspects)
+      .then((data) => {
+        setProspects(data);
+        setError("");
+      })
+      .catch((err) => {
+        console.error("Prospects load error", err);
+        setProspects([]);
+        setError("Impossible de charger les prospects.");
+      })
       .finally(() => setLoading(false));
   };
 
@@ -88,6 +97,7 @@ export default function Prospects() {
         console.error("Prospects setup load error", err);
         setCampaigns([]);
         setTemplates([]);
+        setError("Impossible de charger les filtres ou templates.");
       });
   }, []);
 
@@ -140,10 +150,15 @@ export default function Prospects() {
   };
 
   const handleStatusChange = async (prospect, newStatus) => {
-    await updateProspect(prospect.id, { status: newStatus });
-    setProspects((prev) =>
-      prev.map((p) => (p.id === prospect.id ? { ...p, status: newStatus } : p))
-    );
+    try {
+      await updateProspect(prospect.id, { status: newStatus });
+      setProspects((prev) =>
+        prev.map((p) => (p.id === prospect.id ? { ...p, status: newStatus } : p))
+      );
+    } catch (err) {
+      console.error("Prospect status update error", err);
+      setError("Impossible de mettre a jour le statut.");
+    }
   };
 
   return (
@@ -154,6 +169,12 @@ export default function Prospects() {
           {prospects.length} résultat{prospects.length !== 1 ? "s" : ""}
         </p>
       </div>
+
+      {error && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
 
       {/* Filtres */}
       <div className="flex flex-wrap gap-3">
