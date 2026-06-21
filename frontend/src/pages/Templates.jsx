@@ -23,6 +23,22 @@ Cordialement,
 [Votre nom]`,
 };
 
+const apiErrorMessage = (err, fallback) => {
+  const data = err.response?.data;
+
+  if (!data) return fallback;
+  if (typeof data === "string") return data.slice(0, 240);
+  if (data.error && data.detail) return `${data.error} ${data.detail}`;
+  if (data.error) return data.error;
+  if (data.detail) return data.detail;
+
+  const fieldErrors = Object.entries(data)
+    .map(([field, message]) => `${field}: ${Array.isArray(message) ? message.join(", ") : message}`)
+    .join(" ");
+
+  return fieldErrors || fallback;
+};
+
 export default function Templates() {
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -40,7 +56,7 @@ export default function Templates() {
       .catch((err) => {
         console.error("Templates load error", err);
         setTemplates([]);
-        setError("Impossible de charger les templates.");
+        setError(apiErrorMessage(err, "Impossible de charger les templates."));
       })
       .finally(() => setLoading(false));
 
@@ -69,7 +85,7 @@ export default function Templates() {
       load();
     } catch (err) {
       console.error("Template save error", err);
-      setError("Impossible de sauvegarder ce template.");
+      setError(apiErrorMessage(err, "Impossible de sauvegarder ce template."));
     } finally {
       setSaving(false);
     }
@@ -82,7 +98,7 @@ export default function Templates() {
       load();
     } catch (err) {
       console.error("Template delete error", err);
-      setError("Impossible de supprimer ce template.");
+      setError(apiErrorMessage(err, "Impossible de supprimer ce template."));
     }
   };
 

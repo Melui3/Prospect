@@ -2,7 +2,7 @@ import logging
 import threading
 
 from django.conf import settings
-from django.db import close_old_connections
+from django.db import close_old_connections, connection
 from django.utils import timezone
 from django.db.models import Count, Q
 from django.contrib.auth.models import User
@@ -101,6 +101,111 @@ def demo_template_from_payload(data, pk=999):
         "created_at": now,
         "updated_at": now,
     }
+
+
+def template_db_columns():
+    with connection.cursor() as cursor:
+        return {
+            column.name
+            for column in connection.introspection.get_table_description(
+                cursor,
+                EmailTemplate._meta.db_table,
+            )
+        }
+
+
+def template_value_fields():
+    columns = template_db_columns()
+    fields = ["id", "name", "subject", "body"]
+    for field in ("created_at", "updated_at"):
+        if field in columns:
+            fields.append(field)
+    return fields
+
+
+def normalize_template_row(row):
+    if "created_at" not in row:
+        row["created_at"] = None
+    if "updated_at" not in row:
+        row["updated_at"] = row["created_at"]
+    return row
+
+
+def template_queryset_values():
+    return EmailTemplate.objects.values(*template_value_fields())
+
+
+def template_ordered_values():
+    order_field = "-created_at" if "created_at" in template_db_columns() else "-id"
+    return template_queryset_values().order_by(order_field)
+
+
+def template_response(pk):
+    row = template_queryset_values().filter(pk=pk).first()
+    if not row:
+        return None
+    return normalize_template_row(row)
+
+
+def validate_template_payload(data, partial=False):
+    updates = {}
+    errors = {}
+    limits = {"name": 100, "subject": 200}
+
+    for field in ("name", "subject", "body"):
+        if partial and field not in data:
+            continue
+
+        value = data.get(field, "")
+        if value is None:
+            value = ""
+        value = str(value).replace("\x00", "")
+
+        if not value.strip():
+            errors[field] = "Champ requis."
+            continue
+
+        max_length = limits.get(field)
+        if max_length and len(value) > max_length:
+            errors[field] = f"{max_length} caracteres maximum."
+            continue
+
+        updates[field] = value.strip() if field != "body" else value
+
+    return updates, errors
+
+
+def insert_template(updates):
+    now = timezone.now()
+    columns = template_db_columns()
+    fields = ["name", "subject", "body"]
+    params = [updates["name"], updates["subject"], updates["body"]]
+
+    if "created_at" in columns:
+        fields.append("created_at")
+        params.append(now)
+    if "updated_at" in columns:
+        fields.append("updated_at")
+        params.append(now)
+
+    quote = connection.ops.quote_name
+    table = quote(EmailTemplate._meta.db_table)
+    column_sql = ", ".join(quote(field) for field in fields)
+    placeholders = ", ".join(["%s"] * len(fields))
+
+    with connection.cursor() as cursor:
+        if connection.vendor == "postgresql":
+            cursor.execute(
+                f"INSERT INTO {table} ({column_sql}) VALUES ({placeholders}) RETURNING id",
+                params,
+            )
+            return cursor.fetchone()[0]
+
+        cursor.execute(
+            f"INSERT INTO {table} ({column_sql}) VALUES ({placeholders})",
+            params,
+        )
+        return cursor.lastrowid
 
 
 # ── Campaigns ─────────────────────────────────────────────────
@@ -309,7 +414,18 @@ class EmailTemplateViewSet(viewsets.ModelViewSet):
     def list(self, request, *args, **kwargs):
         if is_demo_request(request):
             return Response(demo_templates())
-        return super().list(request, *args, **kwargs)
+        try:
+            templates = [
+                normalize_template_row(row)
+                for row in template_ordered_values()
+            ]
+            return Response(templates)
+        except Exception as exc:
+            logger.exception("Template list failed")
+            return Response(
+                {"error": "Impossible de charger les templates.", "detail": str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     def retrieve(self, request, *args, **kwargs):
         if is_demo_request(request):
@@ -317,7 +433,17 @@ class EmailTemplateViewSet(viewsets.ModelViewSet):
             if not template:
                 return not_found_response()
             return Response(template)
-        return super().retrieve(request, *args, **kwargs)
+        try:
+            template = template_response(kwargs.get("pk"))
+            if not template:
+                return not_found_response()
+            return Response(template)
+        except Exception as exc:
+            logger.exception("Template retrieve failed")
+            return Response(
+                {"error": "Impossible de charger ce template.", "detail": str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     def create(self, request, *args, **kwargs):
         if is_demo_request(request):
@@ -325,7 +451,22 @@ class EmailTemplateViewSet(viewsets.ModelViewSet):
                 demo_template_from_payload(request.data),
                 status=status.HTTP_201_CREATED,
             )
-        return super().create(request, *args, **kwargs)
+        updates, errors = validate_template_payload(request.data)
+        if errors:
+            return Response(errors, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            template_id = insert_template(updates)
+            return Response(
+                template_response(template_id),
+                status=status.HTTP_201_CREATED,
+            )
+        except Exception as exc:
+            logger.exception("Template create failed")
+            return Response(
+                {"error": "Impossible de creer ce template.", "detail": str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     def partial_update(self, request, *args, **kwargs):
         if is_demo_request(request):
@@ -333,12 +474,42 @@ class EmailTemplateViewSet(viewsets.ModelViewSet):
             template.update(request.data)
             template["updated_at"] = timezone.now().isoformat()
             return Response(template)
-        return super().partial_update(request, *args, **kwargs)
+        template_id = kwargs.get("pk")
+        if not template_response(template_id):
+            return not_found_response()
+
+        updates, errors = validate_template_payload(request.data, partial=True)
+        if errors:
+            return Response(errors, status=status.HTTP_400_BAD_REQUEST)
+        if not updates:
+            return Response(template_response(template_id))
+
+        try:
+            if "updated_at" in template_db_columns():
+                updates["updated_at"] = timezone.now()
+            EmailTemplate.objects.filter(pk=template_id).update(**updates)
+            return Response(template_response(template_id))
+        except Exception as exc:
+            logger.exception("Template update failed")
+            return Response(
+                {"error": "Impossible de sauvegarder ce template.", "detail": str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     def destroy(self, request, *args, **kwargs):
         if is_demo_request(request):
             return Response(status=status.HTTP_204_NO_CONTENT)
-        return super().destroy(request, *args, **kwargs)
+        try:
+            deleted, _ = EmailTemplate.objects.filter(pk=kwargs.get("pk")).delete()
+            if not deleted:
+                return not_found_response()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Exception as exc:
+            logger.exception("Template delete failed")
+            return Response(
+                {"error": "Impossible de supprimer ce template.", "detail": str(exc)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 # ── Register ──────────────────────────────────────────────────
