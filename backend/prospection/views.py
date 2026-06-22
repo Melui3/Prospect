@@ -14,6 +14,7 @@ from rest_framework.response import Response
 from .models import Campaign, Prospect, EmailTemplate, EmailLog
 from .serializers import (
     CampaignSerializer,
+    ProspectListSerializer,
     ProspectSerializer,
     EmailTemplateSerializer,
 )
@@ -322,6 +323,11 @@ class ProspectViewSet(
     serializer_class = ProspectSerializer
     http_method_names = ["get", "post", "patch", "delete"]
 
+    def get_serializer_class(self):
+        if self.action == "list":
+            return ProspectListSerializer
+        return ProspectSerializer
+
     def list(self, request, *args, **kwargs):
         if is_demo_request(request):
             return Response(demo_prospects(request.query_params))
@@ -350,7 +356,17 @@ class ProspectViewSet(
         return super().destroy(request, *args, **kwargs)
 
     def get_queryset(self):
-        qs = Prospect.objects.select_related("campaign").prefetch_related("email_logs")
+        qs = Prospect.objects.select_related("campaign")
+
+        if self.action == "list":
+            qs = qs.annotate(
+                emails_sent_count=Count(
+                    "email_logs",
+                    filter=Q(email_logs__success=True),
+                )
+            )
+        else:
+            qs = qs.prefetch_related("email_logs")
 
         campaign_id = self.request.query_params.get("campaign")
         if campaign_id:
