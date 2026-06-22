@@ -26,8 +26,8 @@ export default function Campaigns() {
   const [session, setSession] = useState(null);
   const isDemoMode = session?.demo_enabled && !session?.is_owner;
 
-  const load = () =>
-    getCampaigns()
+  const load = (options = {}) =>
+    getCampaigns(options)
       .then((data) => {
         setCampaigns(data);
       })
@@ -76,9 +76,9 @@ export default function Campaigns() {
       const result = await launchCampaign(id);
       if (result.status === "running") {
         alert("Prospection lancee. Les resultats vont arriver dans quelques instants.");
-        load();
-        setTimeout(load, 5000);
-        setTimeout(load, 15000);
+        load({ force: true });
+        setTimeout(() => load({ force: true }), 5000);
+        setTimeout(() => load({ force: true }), 15000);
         return;
       }
       if (result.status === "error" || result.error) {
