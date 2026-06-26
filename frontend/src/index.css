@@ -4,28 +4,28 @@
 
 @layer base {
   :root {
-    --sin-void: #10060a;
-    --sin-black-cherry: #19080f;
-    --sin-black-cherry-2: #220b14;
-    --sin-panel: #2a0f18;
-    --sin-panel-soft: #34131e;
-    --sin-oxblood: #581426;
-    --sin-carmine: #9f2335;
-    --sin-carmine-soft: #cf4657;
-    --sin-gold: #f3c760;
-    --sin-gold-soft: #ffe2a0;
-    --sin-ivory: #f8ead2;
-    --sin-ivory-muted: #cdbb9f;
-    --sin-jade: #53d6a6;
-    --sin-jade-soft: #a6f0d4;
-    --sin-line: rgba(243, 199, 96, 0.18);
-    --sin-line-strong: rgba(243, 199, 96, 0.34);
-    --sin-shadow: 0 18px 60px rgba(5, 1, 4, 0.38);
+    --sin-void: #0d0d0d;
+    --sin-black-cherry: #0d0d0d;
+    --sin-black-cherry-2: #17110f;
+    --sin-panel: #362822;
+    --sin-panel-soft: #44342d;
+    --sin-oxblood: #710912;
+    --sin-carmine: #710912;
+    --sin-carmine-soft: #9b1a25;
+    --sin-gold: #c28d39;
+    --sin-gold-soft: #d6ad68;
+    --sin-ivory: #efe5d2;
+    --sin-ivory-muted: #c8baa3;
+    --sin-jade: #c28d39;
+    --sin-jade-soft: #efe5d2;
+    --sin-line: rgba(194, 141, 57, 0.22);
+    --sin-line-strong: rgba(194, 141, 57, 0.42);
+    --sin-shadow: 0 18px 60px rgba(13, 13, 13, 0.48);
   }
 
   body {
     background:
-      linear-gradient(135deg, var(--sin-void) 0%, var(--sin-black-cherry) 42%, #220810 100%);
+      linear-gradient(135deg, var(--sin-void) 0%, #140f0d 45%, var(--sin-panel) 100%);
     color: var(--sin-ivory);
     font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
@@ -33,13 +33,13 @@
   input,
   textarea,
   select {
-    background-color: rgba(248, 234, 210, 0.96);
+    background-color: rgba(239, 229, 210, 0.96);
     color: var(--sin-black-cherry);
   }
 
   input::placeholder,
   textarea::placeholder {
-    color: rgba(88, 20, 38, 0.55);
+    color: rgba(54, 40, 34, 0.58);
   }
 }
 
@@ -58,15 +58,15 @@
   }
 
   .bg-slate-50 {
-    background-color: rgba(255, 226, 160, 0.07) !important;
+    background-color: rgba(239, 229, 210, 0.07) !important;
   }
 
   .bg-slate-100 {
-    background-color: rgba(255, 226, 160, 0.12) !important;
+    background-color: rgba(239, 229, 210, 0.12) !important;
   }
 
   .bg-slate-700 {
-    background-color: rgba(88, 20, 38, 0.72) !important;
+    background-color: rgba(113, 9, 18, 0.72) !important;
   }
 
   .bg-slate-800,
@@ -79,7 +79,7 @@
   .bg-yellow-100,
   .bg-amber-50,
   .bg-amber-500\/10 {
-    background-color: rgba(243, 199, 96, 0.14) !important;
+    background-color: rgba(194, 141, 57, 0.16) !important;
   }
 
   .bg-blue-600,
@@ -89,7 +89,7 @@
 
   .bg-green-50,
   .bg-green-100 {
-    background-color: rgba(83, 214, 166, 0.14) !important;
+    background-color: rgba(194, 141, 57, 0.16) !important;
   }
 
   .bg-green-600,
@@ -99,12 +99,12 @@
 
   .bg-orange-50,
   .bg-purple-50 {
-    background-color: rgba(159, 35, 53, 0.16) !important;
+    background-color: rgba(113, 9, 18, 0.2) !important;
   }
 
   .bg-red-50,
   .bg-red-100 {
-    background-color: rgba(207, 70, 87, 0.16) !important;
+    background-color: rgba(113, 9, 18, 0.24) !important;
   }
 
   .bg-blue-600.text-white,
@@ -175,7 +175,7 @@
   .hover\:bg-slate-50:hover,
   .hover\:bg-slate-700:hover,
   .hover\:bg-slate-800:hover {
-    background-color: rgba(88, 20, 38, 0.68) !important;
+    background-color: rgba(113, 9, 18, 0.68) !important;
   }
 
   .hover\:bg-blue-200:hover,
@@ -204,6 +204,6 @@
   }
 
   .focus\:ring-blue-500:focus {
-    --tw-ring-color: rgba(243, 199, 96, 0.62) !important;
+    --tw-ring-color: rgba(194, 141, 57, 0.62) !important;
   }
 }
