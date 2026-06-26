@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <script>
+      // GitHub Pages SPA redirect: /Prospect/campaigns → /Prospect/#/campaigns
+      const base = '/Prospect';
+      const path = window.location.pathname.replace(base, '') || '/';
+      window.location.replace(base + '/#' + path + window.location.search);
+    </script>
+  </head>
+  <body></body>
+</html>
