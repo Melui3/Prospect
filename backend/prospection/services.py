@@ -146,18 +146,13 @@ def _query_overpass(tag_filters: str | list[str], lat: str, lon: str, rayon_m: i
     elements_by_key = {}
     errors = []
 
-    for tag_filter in tag_filters:
-        if time.monotonic() >= deadline:
-            errors.append("temps total Overpass depasse")
-            break
-
-        try:
-            for element in _query_overpass_filter(tag_filter, lat, lon, rayon_m, deadline):
-                element_key = (element.get("type"), element.get("id"))
-                elements_by_key[element_key] = element
-        except Exception as exc:
-            logger.warning("Overpass filter error for %s: %s", tag_filter, exc)
-            errors.append(str(exc))
+    try:
+        for element in _query_overpass_filters(tag_filters, lat, lon, rayon_m, deadline):
+            element_key = (element.get("type"), element.get("id"))
+            elements_by_key[element_key] = element
+    except Exception as exc:
+        logger.warning("Overpass filters error for %s: %s", ", ".join(tag_filters), exc)
+        errors.append(str(exc))
 
     if elements_by_key:
         return list(elements_by_key.values())
@@ -172,8 +167,8 @@ def _query_overpass(tag_filters: str | list[str], lat: str, lon: str, rayon_m: i
     return []
 
 
-def _query_overpass_filter(
-    tag_filter: str,
+def _query_overpass_filters(
+    tag_filters: list[str],
     lat: str,
     lon: str,
     rayon_m: int,
@@ -181,14 +176,20 @@ def _query_overpass_filter(
 ) -> list[dict]:
     remaining_seconds = max(1, int(deadline - time.monotonic()))
     query_timeout = min(settings.OVERPASS_TIMEOUT, remaining_seconds)
-    query = f"""
-    [out:json][timeout:{query_timeout}];
-    (
-      node[{tag_filter}](around:{rayon_m},{lat},{lon});
-      way[{tag_filter}](around:{rayon_m},{lat},{lon});
-    );
-    out tags;
-    """
+    query_parts = []
+    for tag_filter in tag_filters:
+        query_parts.append(f"node[{tag_filter}](around:{rayon_m},{lat},{lon});")
+        query_parts.append(f"way[{tag_filter}](around:{rayon_m},{lat},{lon});")
+
+    query = "\n".join(
+        [
+            f"[out:json][timeout:{query_timeout}];",
+            "(",
+            *query_parts,
+            ");",
+            "out tags;",
+        ]
+    )
     errors = []
     had_empty_response = False
 
@@ -202,7 +203,14 @@ def _query_overpass_filter(
                 endpoint,
                 data=query.encode("utf-8"),
                 headers={**REQUEST_HEADERS, "Content-Type": "text/plain; charset=utf-8"},
-                timeout=max(1, min(settings.OVERPASS_TIMEOUT + 5, remaining_seconds)),
+                timeout=max(
+                    1,
+                    min(
+                        settings.OVERPASS_ENDPOINT_TIMEOUT,
+                        settings.OVERPASS_TIMEOUT + 5,
+                        remaining_seconds,
+                    ),
+                ),
             )
             resp.raise_for_status()
             elements = resp.json().get("elements", [])

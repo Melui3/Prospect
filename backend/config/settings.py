@@ -118,7 +118,8 @@ OWNER_ACCESS_TOKEN = config("OWNER_ACCESS_TOKEN", default="")
 # External scraping services
 DEFAULT_OVERPASS_ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter",
+    "https://z.overpass-api.de/api/interpreter",
+    "https://lz4.overpass-api.de/api/interpreter",
 ]
 CONFIGURED_OVERPASS_ENDPOINTS = [
     endpoint.strip()
@@ -130,6 +131,7 @@ OVERPASS_ENDPOINTS = list(
 )
 OVERPASS_TIMEOUT = config("OVERPASS_TIMEOUT", default=25, cast=int)
 OVERPASS_TOTAL_TIMEOUT = config("OVERPASS_TOTAL_TIMEOUT", default=45, cast=int)
+OVERPASS_ENDPOINT_TIMEOUT = config("OVERPASS_ENDPOINT_TIMEOUT", default=18, cast=int)
 ENRICHMENT_TOTAL_TIMEOUT = config("ENRICHMENT_TOTAL_TIMEOUT", default=70, cast=int)
 WEBSITE_EMAIL_MAX_LOOKUPS = config("WEBSITE_EMAIL_MAX_LOOKUPS", default=30, cast=int)
 WEBSITE_EMAIL_MAX_PAGES = config("WEBSITE_EMAIL_MAX_PAGES", default=3, cast=int)
