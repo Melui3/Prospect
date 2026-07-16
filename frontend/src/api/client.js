@@ -17,6 +17,10 @@ export const getOwnerToken = () => localStorage.getItem(OWNER_TOKEN_KEY) ?? "";
 export const getOwnerApiFailed = () => sessionStorage.getItem(OWNER_API_FAILED_KEY) ?? "";
 export const clearOwnerApiFailed = () => sessionStorage.removeItem(OWNER_API_FAILED_KEY);
 
+const setOwnerApiFailed = (message) => {
+  sessionStorage.setItem(OWNER_API_FAILED_KEY, message);
+};
+
 export const setOwnerToken = (token) => {
   localStorage.setItem(OWNER_TOKEN_KEY, token);
   clearApiCache();
@@ -87,14 +91,10 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     const status = error.response?.status;
-    const method = error.config?.method?.toLowerCase();
 
-    if (status >= 500 && method === "get" && getOwnerToken()) {
+    if ((status === 401 || status === 403) && getOwnerToken()) {
       clearOwnerToken();
-      sessionStorage.setItem(
-        OWNER_API_FAILED_KEY,
-        "L'acces prive a ete desactive car l'API repond 500."
-      );
+      setOwnerApiFailed("Le token prive a ete refuse par l'API.");
       window.location.reload();
       return new Promise(() => {});
     }

@@ -1,6 +1,6 @@
 # ProspectApp
 
-Application de prospection automatique : trouve les commerces locaux sans site web et contacte-les par email.
+Application privee de prospection automatique : trouve des commerces, associations et artisans locaux, puis facilite le suivi et la prise de contact.
 
 ## Stack
 
@@ -49,10 +49,10 @@ Ouvre http://localhost:5173
 
 ## Utilisation
 
-1. **Templates** → Créez un template email avec `{nom}`, `{ville}`, `{secteur}`
-2. **Campagnes** → Créez une campagne (secteur + ville + rayon), cliquez **Lancer**
-3. **Prospects** → Parcourez les prospects trouvés, envoyez des emails en un clic
-4. **Dashboard** → Suivez vos stats
+1. **Acces prive** : configurez `OWNER_ACCESS_TOKEN`, puis entrez le token dans la sidebar.
+2. **Campagnes** : lancez un preset ou creez une recherche secteur + ville + rayon.
+3. **Prospects** : filtrez les resultats, ouvrez les sites, envoyez ou preparez les emails.
+4. **Dashboard** : suivez vos stats.
 
 ## Configuration email Gmail
 

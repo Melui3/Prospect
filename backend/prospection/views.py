@@ -8,7 +8,7 @@ from django.db.models import Count, Q
 from django.contrib.auth.models import User
 from rest_framework import mixins, viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, BasePermission
 from rest_framework.response import Response
 
 from .models import Campaign, Prospect, EmailTemplate, EmailLog
@@ -18,16 +18,7 @@ from .serializers import (
     ProspectSerializer,
     EmailTemplateSerializer,
 )
-from .services import ProspectionTemporaryError, run_prospection, send_prospect_email
-from .demo import (
-    demo_campaign,
-    demo_campaigns,
-    demo_prospect,
-    demo_prospects,
-    demo_stats,
-    demo_template,
-    demo_templates,
-)
+from .services import run_prospection, send_prospect_email
 
 logger = logging.getLogger(__name__)
 
@@ -69,39 +60,15 @@ def is_owner_request(request):
     return request.headers.get("X-Owner-Token") == owner_token
 
 
-def is_demo_request(request):
-    return not is_owner_request(request)
+class OwnerOnly(BasePermission):
+    message = "Acces prive requis."
+
+    def has_permission(self, request, view):
+        return is_owner_request(request)
 
 
 def not_found_response():
     return Response({"detail": "Introuvable."}, status=status.HTTP_404_NOT_FOUND)
-
-
-def demo_campaign_from_payload(data, pk=999):
-    return {
-        "id": pk,
-        "secteur": data.get("secteur", "restaurant"),
-        "ville": data.get("ville", "Rennes"),
-        "rayon_km": data.get("rayon_km", 10),
-        "status": "draft",
-        "error_message": "",
-        "created_at": timezone.now().isoformat(),
-        "launched_at": None,
-        "total_prospects": 0,
-        "prospects_with_email": 0,
-    }
-
-
-def demo_template_from_payload(data, pk=999):
-    now = timezone.now().isoformat()
-    return {
-        "id": pk,
-        "name": data.get("name", "Template demo"),
-        "subject": data.get("subject", "Bonjour {nom}"),
-        "body": data.get("body", "Message de demonstration."),
-        "created_at": now,
-        "updated_at": now,
-    }
 
 
 def template_db_columns():
@@ -214,45 +181,11 @@ def insert_template(updates):
 class CampaignViewSet(viewsets.ModelViewSet):
     queryset = Campaign.objects.all()
     serializer_class = CampaignSerializer
+    permission_classes = [OwnerOnly]
     http_method_names = ["get", "post", "patch", "delete"]
-
-    def list(self, request, *args, **kwargs):
-        if is_demo_request(request):
-            return Response(demo_campaigns())
-        return super().list(request, *args, **kwargs)
-
-    def retrieve(self, request, *args, **kwargs):
-        if is_demo_request(request):
-            campaign = demo_campaign(kwargs.get("pk"))
-            if not campaign:
-                return not_found_response()
-            return Response(campaign)
-        return super().retrieve(request, *args, **kwargs)
-
-    def create(self, request, *args, **kwargs):
-        if is_demo_request(request):
-            return Response(
-                demo_campaign_from_payload(request.data),
-                status=status.HTTP_201_CREATED,
-            )
-        return super().create(request, *args, **kwargs)
-
-    def destroy(self, request, *args, **kwargs):
-        if is_demo_request(request):
-            return Response(status=status.HTTP_204_NO_CONTENT)
-        return super().destroy(request, *args, **kwargs)
 
     @action(detail=True, methods=["post"], url_path="launch")
     def launch(self, request, pk=None):
-        if is_demo_request(request):
-            return Response(
-                {
-                    "message": "Prospection demo terminee.",
-                    "total_found": 18,
-                    "with_email": 12,
-                }
-            )
-
         campaign = self.get_object()
 
         if campaign.status == "running":
@@ -274,42 +207,6 @@ class CampaignViewSet(viewsets.ModelViewSet):
             }
         )
 
-        try:
-            stats = run_prospection(campaign)
-            campaign.status = "done"
-            campaign.save(update_fields=["status"])
-            return Response(
-                {
-                    "message": "Prospection terminée.",
-                    "total_found": stats["total"],
-                    "with_email": stats["with_email"],
-                }
-            )
-        except ProspectionTemporaryError as exc:
-            campaign.status = "error"
-            campaign.error_message = str(exc)
-            campaign.save(update_fields=["status", "error_message"])
-            return Response(
-                {
-                    "status": "error",
-                    "error": str(exc),
-                    "total_found": campaign.total_prospects,
-                    "with_email": campaign.prospects_with_email,
-                }
-            )
-        except Exception as exc:
-            campaign.status = "error"
-            campaign.error_message = str(exc)
-            campaign.save(update_fields=["status", "error_message"])
-            return Response(
-                {
-                    "status": "error",
-                    "error": str(exc),
-                    "total_found": campaign.total_prospects,
-                    "with_email": campaign.prospects_with_email,
-                }
-            )
-
 
 # ── Prospects ─────────────────────────────────────────────────
 
@@ -321,39 +218,13 @@ class ProspectViewSet(
     viewsets.GenericViewSet,
 ):
     serializer_class = ProspectSerializer
+    permission_classes = [OwnerOnly]
     http_method_names = ["get", "post", "patch", "delete"]
 
     def get_serializer_class(self):
         if self.action == "list":
             return ProspectListSerializer
         return ProspectSerializer
-
-    def list(self, request, *args, **kwargs):
-        if is_demo_request(request):
-            return Response(demo_prospects(request.query_params))
-        return super().list(request, *args, **kwargs)
-
-    def retrieve(self, request, *args, **kwargs):
-        if is_demo_request(request):
-            prospect = demo_prospect(kwargs.get("pk"))
-            if not prospect:
-                return not_found_response()
-            return Response(prospect)
-        return super().retrieve(request, *args, **kwargs)
-
-    def partial_update(self, request, *args, **kwargs):
-        if is_demo_request(request):
-            prospect = demo_prospect(kwargs.get("pk"))
-            if not prospect:
-                return not_found_response()
-            prospect.update(request.data)
-            return Response(prospect)
-        return super().partial_update(request, *args, **kwargs)
-
-    def destroy(self, request, *args, **kwargs):
-        if is_demo_request(request):
-            return Response(status=status.HTTP_204_NO_CONTENT)
-        return super().destroy(request, *args, **kwargs)
 
     def get_queryset(self):
         qs = Prospect.objects.select_related("campaign")
@@ -392,12 +263,6 @@ class ProspectViewSet(
 
     @action(detail=True, methods=["post"], url_path="send-email")
     def send_email(self, request, pk=None):
-        if is_demo_request(request):
-            prospect = demo_prospect(pk)
-            if not prospect:
-                return not_found_response()
-            return Response({"message": "Email demo simule."})
-
         prospect = self.get_object()
         template_id = request.data.get("template_id")
 
@@ -425,11 +290,10 @@ class ProspectViewSet(
 class EmailTemplateViewSet(viewsets.ModelViewSet):
     queryset = EmailTemplate.objects.all()
     serializer_class = EmailTemplateSerializer
+    permission_classes = [OwnerOnly]
     http_method_names = ["get", "post", "patch", "delete"]
 
     def list(self, request, *args, **kwargs):
-        if is_demo_request(request):
-            return Response(demo_templates())
         try:
             templates = [
                 normalize_template_row(row)
@@ -444,11 +308,6 @@ class EmailTemplateViewSet(viewsets.ModelViewSet):
             )
 
     def retrieve(self, request, *args, **kwargs):
-        if is_demo_request(request):
-            template = demo_template(kwargs.get("pk"))
-            if not template:
-                return not_found_response()
-            return Response(template)
         try:
             template = template_response(kwargs.get("pk"))
             if not template:
@@ -462,11 +321,6 @@ class EmailTemplateViewSet(viewsets.ModelViewSet):
             )
 
     def create(self, request, *args, **kwargs):
-        if is_demo_request(request):
-            return Response(
-                demo_template_from_payload(request.data),
-                status=status.HTTP_201_CREATED,
-            )
         updates, errors = validate_template_payload(request.data)
         if errors:
             return Response(errors, status=status.HTTP_400_BAD_REQUEST)
@@ -485,11 +339,6 @@ class EmailTemplateViewSet(viewsets.ModelViewSet):
             )
 
     def partial_update(self, request, *args, **kwargs):
-        if is_demo_request(request):
-            template = demo_template(kwargs.get("pk")) or demo_template_from_payload({}, kwargs.get("pk"))
-            template.update(request.data)
-            template["updated_at"] = timezone.now().isoformat()
-            return Response(template)
         template_id = kwargs.get("pk")
         if not template_response(template_id):
             return not_found_response()
@@ -513,8 +362,6 @@ class EmailTemplateViewSet(viewsets.ModelViewSet):
             )
 
     def destroy(self, request, *args, **kwargs):
-        if is_demo_request(request):
-            return Response(status=status.HTTP_204_NO_CONTENT)
         try:
             deleted, _ = EmailTemplate.objects.filter(pk=kwargs.get("pk")).delete()
             if not deleted:
@@ -550,10 +397,8 @@ def register(request):
 # ── Stats globales ─────────────────────────────────────────────
 
 @api_view(["GET"])
+@permission_classes([OwnerOnly])
 def stats(request):
-    if is_demo_request(request):
-        return Response(demo_stats())
-
     total_campaigns = Campaign.objects.count()
     done_campaigns = Campaign.objects.filter(status="done").count()
     total_prospects = Prospect.objects.count()
@@ -579,10 +424,11 @@ def stats(request):
 @permission_classes([AllowAny])
 def session_status(request):
     is_owner = is_owner_request(request)
+    auth_required = bool(getattr(settings, "OWNER_ACCESS_TOKEN", ""))
     return Response(
         {
             "is_owner": is_owner,
-            "mode": "owner" if is_owner else "demo",
-            "demo_enabled": bool(getattr(settings, "OWNER_ACCESS_TOKEN", "")),
+            "mode": "private" if is_owner else "locked",
+            "auth_required": auth_required,
         }
     )
