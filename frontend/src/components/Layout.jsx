@@ -6,7 +6,6 @@ import {
   enterDemoMode,
   exitDemoMode,
   getOwnerApiFailed,
-  getOwnerToken,
   getSession,
   setOwnerToken,
 } from "../api/client";
@@ -42,7 +41,7 @@ export default function Layout() {
       );
 
   useEffect(() => {
-    if (hasDemoIntent() && !getOwnerToken()) {
+    if (hasDemoIntent()) {
       enterDemoMode();
     }
     refreshSession({ force: true });

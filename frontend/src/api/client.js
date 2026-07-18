@@ -39,14 +39,13 @@ export const clearOwnerToken = () => {
 };
 
 export const enterDemoMode = () => {
-  localStorage.removeItem(OWNER_TOKEN_KEY);
   localStorage.setItem(ACCESS_MODE_KEY, "demo");
   clearApiCache();
 };
 
 export const exitDemoMode = () => {
   if (getAccessMode() === "demo") {
-    localStorage.setItem(ACCESS_MODE_KEY, "locked");
+    localStorage.setItem(ACCESS_MODE_KEY, getOwnerToken() ? "owner" : "locked");
   }
   clearApiCache();
 };
@@ -101,10 +100,10 @@ const api = axios.create({
 
 api.interceptors.request.use((config) => {
   const token = getOwnerToken();
-  if (token) {
-    config.headers["X-Owner-Token"] = token;
-  } else if (isDemoMode()) {
+  if (isDemoMode()) {
     config.headers["X-Demo-Mode"] = "true";
+  } else if (token) {
+    config.headers["X-Owner-Token"] = token;
   }
   return config;
 });
@@ -114,7 +113,7 @@ api.interceptors.response.use(
   (error) => {
     const status = error.response?.status;
 
-    if ((status === 401 || status === 403) && getOwnerToken()) {
+    if ((status === 401 || status === 403) && !isDemoMode() && getOwnerToken()) {
       clearOwnerToken();
       setOwnerApiFailed("Le token prive a ete refuse par l'API.");
       window.location.reload();
