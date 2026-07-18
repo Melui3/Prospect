@@ -1,6 +1,6 @@
 # ProspectApp
 
-Application privee de prospection automatique : trouve des commerces, associations et artisans locaux, puis facilite le suivi et la prise de contact.
+Application de prospection automatique avec acces prive et demo anonymisee : trouve des commerces, associations et artisans locaux, puis facilite le suivi et la prise de contact.
 
 ## Stack
 
@@ -50,9 +50,12 @@ Ouvre http://localhost:5173
 ## Utilisation
 
 1. **Acces prive** : configurez `OWNER_ACCESS_TOKEN`, puis entrez le token dans la sidebar.
-2. **Campagnes** : lancez un preset ou creez une recherche secteur + ville + rayon.
-3. **Prospects** : filtrez les resultats, ouvrez les sites, envoyez ou preparez les emails.
-4. **Dashboard** : suivez vos stats.
+2. **Demo portfolio** : activez `DEMO_MODE=True`, puis partagez un lien avec `?demo=1`.
+3. **Campagnes** : lancez un preset ou creez une recherche secteur + ville + rayon.
+4. **Prospects** : filtrez les resultats, ouvrez les sites, envoyez ou preparez les emails.
+5. **Dashboard** : suivez vos stats.
+
+La demo utilise des donnees anonymisees et bloque les emails reels, les recherches externes et les modifications persistantes.
 
 ## Configuration email Gmail
 

@@ -5,6 +5,7 @@ export const API_URL = import.meta.env.VITE_API_URL
 
 const OWNER_TOKEN_KEY = "prospect_owner_token";
 const OWNER_API_FAILED_KEY = "prospect_owner_api_failed";
+const ACCESS_MODE_KEY = "prospect_access_mode";
 const GET_CACHE_TTL_MS = 60_000;
 
 const getCache = new Map();
@@ -14,6 +15,8 @@ export const clearApiCache = () => {
 };
 
 export const getOwnerToken = () => localStorage.getItem(OWNER_TOKEN_KEY) ?? "";
+export const getAccessMode = () => localStorage.getItem(ACCESS_MODE_KEY) ?? "locked";
+export const isDemoMode = () => getAccessMode() === "demo";
 export const getOwnerApiFailed = () => sessionStorage.getItem(OWNER_API_FAILED_KEY) ?? "";
 export const clearOwnerApiFailed = () => sessionStorage.removeItem(OWNER_API_FAILED_KEY);
 
@@ -23,11 +26,28 @@ const setOwnerApiFailed = (message) => {
 
 export const setOwnerToken = (token) => {
   localStorage.setItem(OWNER_TOKEN_KEY, token);
+  localStorage.setItem(ACCESS_MODE_KEY, "owner");
   clearApiCache();
 };
 
 export const clearOwnerToken = () => {
   localStorage.removeItem(OWNER_TOKEN_KEY);
+  if (getAccessMode() === "owner") {
+    localStorage.setItem(ACCESS_MODE_KEY, "locked");
+  }
+  clearApiCache();
+};
+
+export const enterDemoMode = () => {
+  localStorage.removeItem(OWNER_TOKEN_KEY);
+  localStorage.setItem(ACCESS_MODE_KEY, "demo");
+  clearApiCache();
+};
+
+export const exitDemoMode = () => {
+  if (getAccessMode() === "demo") {
+    localStorage.setItem(ACCESS_MODE_KEY, "locked");
+  }
   clearApiCache();
 };
 
@@ -83,6 +103,8 @@ api.interceptors.request.use((config) => {
   const token = getOwnerToken();
   if (token) {
     config.headers["X-Owner-Token"] = token;
+  } else if (isDemoMode()) {
+    config.headers["X-Demo-Mode"] = "true";
   }
   return config;
 });

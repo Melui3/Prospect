@@ -4,6 +4,7 @@ import {
   getProspects,
   getCampaigns,
   getTemplates,
+  isDemoMode,
   sendProspectEmail,
   updateProspect,
 } from "../api/client";
@@ -107,13 +108,13 @@ export default function Prospects() {
     if (!selectedTemplate || !emailModal) return;
     setSendingId(emailModal.id);
     try {
-      await sendProspectEmail(emailModal.id, Number(selectedTemplate));
-      alert(`✅ Email envoyé à ${emailModal.email} !`);
+      const result = await sendProspectEmail(emailModal.id, Number(selectedTemplate));
+      alert(result.demo_blocked ? result.message : `Email envoye a ${emailModal.email} !`);
       setEmailModal(null);
       loadProspects();
     } catch (err) {
       const msg = err.response?.data?.error ?? "Erreur d'envoi.";
-      alert(`❌ ${msg}`);
+      alert(msg);
     } finally {
       setSendingId(null);
     }
@@ -131,6 +132,10 @@ export default function Prospects() {
 
   const handleOpenGmail = () => {
     if (!emailModal || !selectedTemplateData) return;
+    if (isDemoMode()) {
+      alert("Mode demo: Gmail n'est pas ouvert pour des contacts fictifs.");
+      return;
+    }
 
     const params = new URLSearchParams({
       view: "cm",

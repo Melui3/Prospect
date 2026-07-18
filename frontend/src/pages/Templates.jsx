@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getTemplates, createTemplate, updateTemplate, deleteTemplate } from "../api/client";
+import { getTemplates, createTemplate, updateTemplate, deleteTemplate, isDemoMode } from "../api/client";
 
 const EMPTY_FORM = { name: "", subject: "", body: "" };
 
@@ -76,13 +76,17 @@ export default function Templates() {
     e.preventDefault();
     setSaving(true);
     try {
+      let result;
       if (editing === "new") {
-        await createTemplate(form);
+        result = await createTemplate(form);
       } else {
-        await updateTemplate(editing.id, form);
+        result = await updateTemplate(editing.id, form);
       }
       setEditing(null);
-      load();
+      await load();
+      if (result?.demo_notice) {
+        setError(result.demo_notice);
+      }
     } catch (err) {
       console.error("Template save error", err);
       setError(apiErrorMessage(err, "Impossible de sauvegarder ce template."));
@@ -95,7 +99,10 @@ export default function Templates() {
     if (!confirm("Supprimer ce template ?")) return;
     try {
       await deleteTemplate(id);
-      load();
+      await load();
+      if (isDemoMode()) {
+        setError("Mode demo: suppression simulee, aucun template n'est supprime.");
+      }
     } catch (err) {
       console.error("Template delete error", err);
       setError(apiErrorMessage(err, "Impossible de supprimer ce template."));

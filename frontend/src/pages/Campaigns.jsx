@@ -169,7 +169,12 @@ export default function Campaigns() {
     try {
       const created = await createCampaign(campaignPayload(preset));
       if (launch) {
-        await launchCampaign(created.id);
+        const result = await launchCampaign(created.id);
+        if (result.demo_blocked) {
+          await load({ force: true });
+          setError(result.message);
+          return;
+        }
         refreshAfterLaunch();
       } else {
         load({ force: true });
@@ -193,6 +198,11 @@ export default function Campaigns() {
 
     try {
       const result = await launchCampaign(id);
+      if (result.demo_blocked) {
+        await load({ force: true });
+        setError(result.message);
+        return;
+      }
       if (result.status === "running") {
         refreshAfterLaunch();
         return;

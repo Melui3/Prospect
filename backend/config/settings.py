@@ -102,7 +102,7 @@ CORS_ALLOWED_ORIGINS = config(
 ).split(",")
 CORS_ALLOWED_ORIGIN_REGEXES = [r"^https://melui3\.github\.io$"]
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_HEADERS = list(default_headers) + ["x-owner-token"]
+CORS_ALLOW_HEADERS = list(default_headers) + ["x-owner-token", "x-demo-mode"]
 
 # DRF
 REST_FRAMEWORK = {
@@ -114,6 +114,7 @@ REST_FRAMEWORK = {
 
 # Private owner access. If unset, the API keeps its local-dev open behavior.
 OWNER_ACCESS_TOKEN = config("OWNER_ACCESS_TOKEN", default="")
+DEMO_MODE = config("DEMO_MODE", default=True, cast=bool)
 
 # External scraping services
 DEFAULT_OVERPASS_ENDPOINTS = [
