@@ -1,7 +1,10 @@
 import axios from "axios";
+import { useStaticDemo } from "./mode";
 
-export const API_URL = import.meta.env.VITE_API_URL
-  ?? (import.meta.env.DEV ? "/api" : "https://very-annalise-honeygroup-12ff0f9f.koyeb.app/api");
+export const STATIC_DEMO = useStaticDemo(window.location.hostname, import.meta.env.VITE_STATIC_DEMO);
+export const DESKTOP_APP = !STATIC_DEMO && import.meta.env.VITE_DESKTOP_MODE === "true";
+
+export const API_URL = import.meta.env.VITE_API_URL || "/api";
 
 const OWNER_TOKEN_KEY = "prospect_owner_token";
 const OWNER_API_FAILED_KEY = "prospect_owner_api_failed";
@@ -14,10 +17,10 @@ export const clearApiCache = () => {
   getCache.clear();
 };
 
-export const getOwnerToken = () => localStorage.getItem(OWNER_TOKEN_KEY) ?? "";
-export const getAccessMode = () => localStorage.getItem(ACCESS_MODE_KEY) ?? "locked";
-export const isDemoMode = () => getAccessMode() === "demo";
-export const getOwnerApiFailed = () => sessionStorage.getItem(OWNER_API_FAILED_KEY) ?? "";
+export const getOwnerToken = () => STATIC_DEMO ? "" : localStorage.getItem(OWNER_TOKEN_KEY) ?? "";
+export const getAccessMode = () => STATIC_DEMO ? "demo" : localStorage.getItem(ACCESS_MODE_KEY) ?? "locked";
+export const isDemoMode = () => STATIC_DEMO || (!DESKTOP_APP && getAccessMode() === "demo");
+export const getOwnerApiFailed = () => STATIC_DEMO ? "" : sessionStorage.getItem(OWNER_API_FAILED_KEY) ?? "";
 export const clearOwnerApiFailed = () => sessionStorage.removeItem(OWNER_API_FAILED_KEY);
 
 const setOwnerApiFailed = (message) => {
@@ -25,6 +28,7 @@ const setOwnerApiFailed = (message) => {
 };
 
 export const setOwnerToken = (token) => {
+  if (STATIC_DEMO) return;
   localStorage.setItem(OWNER_TOKEN_KEY, token);
   localStorage.setItem(ACCESS_MODE_KEY, "owner");
   clearApiCache();
@@ -39,6 +43,7 @@ export const clearOwnerToken = () => {
 };
 
 export const enterDemoMode = () => {
+  if (DESKTOP_APP) return;
   localStorage.setItem(ACCESS_MODE_KEY, "demo");
   clearApiCache();
 };
@@ -97,6 +102,11 @@ const api = axios.create({
   baseURL: API_URL,
   headers: { "Content-Type": "application/json" },
 });
+
+if (STATIC_DEMO) {
+  const adapter = import("./demo").then(({ createDemoAdapter }) => createDemoAdapter());
+  api.defaults.adapter = async (config) => (await adapter)(config);
+}
 
 api.interceptors.request.use((config) => {
   const token = getOwnerToken();

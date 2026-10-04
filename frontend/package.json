@@ -7,8 +7,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:demo": "vite build --mode demo",
+    "test": "node --test src/api/*.test.js",
     "preview": "vite preview",
-    "predeploy": "npm run build",
+    "predeploy": "npm run build:demo",
     "deploy": "gh-pages -d dist"
   },
   "dependencies": {

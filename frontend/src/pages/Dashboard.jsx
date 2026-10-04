@@ -54,7 +54,7 @@ function DemoIntro() {
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
           <p className="font-semibold text-slate-800">Donnees privees protegees</p>
           <p className="mt-1 text-sm leading-5 text-slate-500">
-            Ma vraie base de prospects reste separee et protegee par token.
+            Ma vraie base de prospects reste sur mon ordinateur, separee de cette demo.
           </p>
         </div>
       </div>

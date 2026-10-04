@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Outlet, NavLink } from "react-router-dom";
 import {
+  DESKTOP_APP,
   clearOwnerApiFailed,
   clearOwnerToken,
   enterDemoMode,
@@ -41,7 +42,7 @@ export default function Layout() {
       );
 
   useEffect(() => {
-    if (hasDemoIntent()) {
+    if (!DESKTOP_APP && hasDemoIntent()) {
       enterDemoMode();
     }
     refreshSession({ force: true });
@@ -192,7 +193,7 @@ export default function Layout() {
             </button>
           )}
 
-          {isOwner && (
+          {isOwner && session.auth_required && (
             <button
               type="button"
               onClick={handleLock}
@@ -202,7 +203,7 @@ export default function Layout() {
             </button>
           )}
 
-          {isDemo && (
+          {isDemo && !session.static_demo && (
             <button
               type="button"
               onClick={handleExitDemo}
