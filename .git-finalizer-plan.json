@@ -1,0 +1,13 @@
+{
+  "commitMessage": "Ajouter le finaliseur Git Windows securise",
+  "validation": "Windows PowerShell 5.1 : apercu sans modification; secrets, traversal et index deja stage bloques; commit limite aux chemins declares; modification d'un fichier du manifeste apres commit bloquee; changement local hors lot affiche/exclu; mauvais texte de confirmation laisse le remote bare local intact; PUSH explicite publie uniquement le commit teste; erreur Git journalisee.",
+  "files": [
+    ".git-finalizer-plan.json",
+    "docs/superpowers/plans/2026-11-11-windows-git-finalizer-plan.md",
+    "docs/superpowers/specs/2026-11-11-windows-git-finalizer-design.md",
+    "scripts/Finalize-Git.ps1",
+    "scripts/Finaliser Git.bat",
+    "scripts/git-finalizer/README.md",
+    "scripts/git-finalizer/plan.example.json"
+  ]
+}

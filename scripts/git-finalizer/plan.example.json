@@ -1,0 +1,7 @@
+{
+  "commitMessage": "Decrire le lot teste en une ligne",
+  "validation": "Indiquer les commandes de verification et leurs resultats.",
+  "files": [
+    "chemin/relatif/fichier-a-inclure.txt"
+  ]
+}
