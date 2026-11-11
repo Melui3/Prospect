@@ -149,10 +149,16 @@ function Test-ContentBlocked([string]$Content) {
     '\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b',
     '\bAKIA[A-Z0-9]{16}\b', '\bxox[baprs]-[A-Za-z0-9-]{16,}\b',
     '\bsk_live_[A-Za-z0-9]{16,}\b', '\bsk-[A-Za-z0-9_-]{28,}\b',
-    '\bnpm_[A-Za-z0-9]{30,}\b', '(?i)\bBearer\s+[A-Za-z0-9._=-]{20,}',
-    '(?i)\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd|secret[_-]?key)\b\s*[:=]\s*["'']?[A-Za-z0-9/+_.=-]{12,}'
+    '\bnpm_[A-Za-z0-9]{30,}\b', '(?i)\bBearer\s+[A-Za-z0-9._=-]{20,}'
   )
   foreach ($pattern in $patterns) { if ([regex]::IsMatch($Content, $pattern)) { return "motif de credential reconnu" } }
+  $credentialAssignments = [regex]::Matches($Content, '(?i)\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd|secret[_-]?key)\b\s*[:=]\s*["'']?([A-Za-z0-9/+_.=-]{12,})')
+  foreach ($assignment in $credentialAssignments) {
+    $value = $assignment.Groups[1].Value
+    $isPlaceholder = $value -match '(?i)^(?:change[-_ ]?me|replace[-_ ]?me|your[-_ ]|placeholder|example|put[-_ ]|insert[-_ ])'
+    $isCodeReference = $value -match '^(?i:request|settings|os|environ|config|data|values)\.'
+    if (!$isPlaceholder -and !$isCodeReference) { return "motif de credential reconnu" }
+  }
   if ([regex]::IsMatch($Content, '(?i)\b(?:tel(?:ephone)?|mobile|phone|portable)\s*[:=]?\s*\+?[0-9][0-9 .()/-]{7,}[0-9]\b')) {
     return "numero de telephone dans le contenu"
   }
@@ -344,3 +350,4 @@ try {
   Add-LocalLog 'Action interrompue' ('Git Finalizer ' + $Action) 1 ($_.Exception.Message)
   exit 1
 }
+exit 0

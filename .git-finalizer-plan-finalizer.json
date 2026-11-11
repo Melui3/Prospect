@@ -1,0 +1,9 @@
+{
+  "commitMessage": "Corriger le finaliseur Git Windows et ses faux positifs",
+  "validation": "Vérification PowerShell du script sans erreur de syntaxe ; aperçu du lot sur dépôt Prospect terminé avec succès, aucun fichier stage ni commit/push ; erreurs Git non masquées par le code de sortie de l'aperçu. Faux positifs limités aux marqueurs explicites de valeur d'exemple et références de code ; les signatures de clés reconnues et emails non fictifs restent bloqués.",
+  "files": [
+    ".git-finalizer-plan-finalizer.json",
+    "scripts/Finalize-Git.ps1",
+    "scripts/Finaliser Git.bat"
+  ]
+}
