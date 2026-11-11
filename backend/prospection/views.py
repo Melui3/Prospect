@@ -1,5 +1,6 @@
 import logging
 import threading
+import hmac
 
 from django.conf import settings
 from django.db import close_old_connections, connection
@@ -65,10 +66,17 @@ def _run_campaign_worker(campaign_id):
 
 
 def is_owner_request(request):
+    if getattr(settings, "DESKTOP_MODE", False):
+        origin = request.headers.get("Origin")
+        if origin and origin != f"{request.scheme}://{request.get_host()}":
+            return False
     owner_token = getattr(settings, "OWNER_ACCESS_TOKEN", "")
+    if settings.DESKTOP_MODE and settings.DESKTOP_AUTO_AUTH:
+        from .private_config import desktop_access_token
+        owner_token = desktop_access_token()
     if not owner_token:
-        return True
-    return request.headers.get("X-Owner-Token") == owner_token
+        return not getattr(settings, "REQUIRE_OWNER_TOKEN", False)
+    return hmac.compare_digest(request.headers.get("X-Owner-Token", ""), owner_token)
 
 
 def is_demo_request(request):
@@ -554,7 +562,9 @@ def stats(request):
 def session_status(request):
     is_owner = is_owner_request(request)
     is_demo = is_demo_request(request)
-    auth_required = bool(getattr(settings, "OWNER_ACCESS_TOKEN", ""))
+    auth_required = bool(getattr(settings, "OWNER_ACCESS_TOKEN", "")) or bool(
+        getattr(settings, "REQUIRE_OWNER_TOKEN", False)
+    ) or bool(settings.DESKTOP_MODE and settings.DESKTOP_AUTO_AUTH)
     mode = "private" if is_owner else "demo" if is_demo else "locked"
 
     return Response(
@@ -564,5 +574,6 @@ def session_status(request):
             "mode": mode,
             "auth_required": auth_required,
             "demo_available": bool(getattr(settings, "DEMO_MODE", False)),
+            "desktop": bool(getattr(settings, "DESKTOP_MODE", False)),
         }
     )

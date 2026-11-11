@@ -31,10 +31,18 @@ dist/
 
 # Vite
 frontend/dist/
+backend/desktop_static/
+backend/backups/
+backend/private-settings.bin
+backend/.worker.lock
+backend/.activity.lock
+backend/private-settings.tmp
+backend/.qa/
 
 # OS
 .DS_Store
 Thumbs.db
+*.lnk
 
 # IDE
 .vscode/

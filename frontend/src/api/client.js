@@ -1,5 +1,6 @@
 import axios from "axios";
 import { useStaticDemo } from "./mode";
+import { desktopAccessFromFragment } from "./personal-utils";
 
 export const STATIC_DEMO = useStaticDemo(window.location.hostname, import.meta.env.VITE_STATIC_DEMO);
 export const DESKTOP_APP = !STATIC_DEMO && import.meta.env.VITE_DESKTOP_MODE === "true";
@@ -47,6 +48,13 @@ export const enterDemoMode = () => {
   localStorage.setItem(ACCESS_MODE_KEY, "demo");
   clearApiCache();
 };
+
+// Fragments are never transmitted in HTTP requests or server logs.
+if (DESKTOP_APP && window.location.hash.startsWith("#/?access=")) {
+  const access = desktopAccessFromFragment(DESKTOP_APP, window.location.hash);
+  if (access) setOwnerToken(access);
+  window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#/dashboard`);
+}
 
 export const exitDemoMode = () => {
   if (getAccessMode() === "demo") {
@@ -203,3 +211,5 @@ export const deleteTemplate = (id) =>
 
 export const getStats = (options = {}) =>
   cachedGet("stats", () => api.get("/stats/").then((r) => r.data), options);
+
+export default api;

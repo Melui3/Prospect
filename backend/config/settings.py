@@ -7,6 +7,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = config("SECRET_KEY", default="django-insecure-change-me-in-production")
 DEBUG = config("DEBUG", default=True, cast=bool)
+DESKTOP_MODE = config("DESKTOP_MODE", default=False, cast=bool)
+DESKTOP_AUTO_AUTH = config("DESKTOP_AUTO_AUTH", default=True, cast=bool)
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="*").split(",")
 
 INSTALLED_APPS = [
@@ -22,6 +24,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "prospection.middleware.DesktopDatabaseGate",
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
@@ -58,7 +61,7 @@ DATABASE_URL = config("DATABASE_URL", default=None)
 
 if DATABASE_URL:
     DATABASES = {"default": dj_database_url.parse(DATABASE_URL, conn_max_age=600)}
-elif DEBUG:
+elif DEBUG or DESKTOP_MODE:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
@@ -100,9 +103,9 @@ CORS_ALLOWED_ORIGINS = config(
     "CORS_ALLOWED_ORIGINS",
     default="http://localhost:5173,http://localhost:3000,https://melui3.github.io",
 ).split(",")
-CORS_ALLOWED_ORIGIN_REGEXES = [r"^https://melui3\.github\.io$"]
+CORS_ALLOWED_ORIGIN_REGEXES = [] if DESKTOP_MODE else [r"^https://melui3\.github\.io$"]
 CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_HEADERS = list(default_headers) + ["x-owner-token", "x-demo-mode"]
+CORS_ALLOW_HEADERS = list(default_headers) + ["x-owner-token", "x-demo-mode", "idempotency-key"]
 
 # DRF
 REST_FRAMEWORK = {
@@ -112,9 +115,16 @@ REST_FRAMEWORK = {
     ],
 }
 
-# Private owner access. If unset, the API keeps its local-dev open behavior.
+# Private owner access. Local dev stays open by default; prod/desktop fail closed.
 OWNER_ACCESS_TOKEN = config("OWNER_ACCESS_TOKEN", default="")
+REQUIRE_OWNER_TOKEN = config("REQUIRE_OWNER_TOKEN", default=not DEBUG, cast=bool)
 DEMO_MODE = config("DEMO_MODE", default=True, cast=bool)
+
+# Optional local desktop frontend served by Django.
+SERVE_FRONTEND = config("SERVE_FRONTEND", default=False, cast=bool)
+FRONTEND_DIST_DIR = Path(config("FRONTEND_DIST_DIR", default="desktop_static"))
+if not FRONTEND_DIST_DIR.is_absolute():
+    FRONTEND_DIST_DIR = BASE_DIR / FRONTEND_DIST_DIR
 
 # External scraping services
 DEFAULT_OVERPASS_ENDPOINTS = [
@@ -135,7 +145,7 @@ OVERPASS_TOTAL_TIMEOUT = config("OVERPASS_TOTAL_TIMEOUT", default=45, cast=int)
 OVERPASS_ENDPOINT_TIMEOUT = config("OVERPASS_ENDPOINT_TIMEOUT", default=18, cast=int)
 ENRICHMENT_TOTAL_TIMEOUT = config("ENRICHMENT_TOTAL_TIMEOUT", default=70, cast=int)
 WEBSITE_EMAIL_MAX_LOOKUPS = config("WEBSITE_EMAIL_MAX_LOOKUPS", default=30, cast=int)
-WEBSITE_EMAIL_MAX_PAGES = config("WEBSITE_EMAIL_MAX_PAGES", default=3, cast=int)
+WEBSITE_EMAIL_MAX_PAGES = config("WEBSITE_EMAIL_MAX_PAGES", default=5, cast=int)
 WEBSITE_EMAIL_TIMEOUT = config("WEBSITE_EMAIL_TIMEOUT", default=4, cast=int)
 SOCIAL_SEARCH_MAX_LOOKUPS = config("SOCIAL_SEARCH_MAX_LOOKUPS", default=20, cast=int)
 SOCIAL_SEARCH_TIMEOUT = config("SOCIAL_SEARCH_TIMEOUT", default=4, cast=int)
@@ -151,3 +161,6 @@ EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
 EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default=EMAIL_HOST_USER)
+EMAIL_TIMEOUT = 20
+BREVO_API_KEY = config("BREVO_API_KEY", default="")
+BACKUP_DIR = BASE_DIR / "backups"

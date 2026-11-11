@@ -8,13 +8,14 @@ import time
 import logging
 import re
 import unicodedata
+import threading
+import ipaddress
+import socket
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 from django.conf import settings
-from django.core.mail import send_mail
-from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,8 @@ REQUEST_HEADERS = {
     "User-Agent": "prospect-app/1.0",
     "Accept": "application/json",
 }
+_geocoding_lock = threading.Lock()
+_last_geocoding_at = 0
 
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 CONTACT_LINK_KEYWORDS = (
@@ -96,6 +99,8 @@ class ProspectionTemporaryError(RuntimeError):
 
 # ── Tags OSM connus ────────────────────────────────────────────
 OSM_TAGS = {
+    "commerce": '"shop"',
+    "institut de beaute": '"shop"="beauty"',
     "boulangerie": '"shop"="bakery"',
     "restaurant": '"amenity"="restaurant"',
     "coiffeur": '"shop"="hairdresser"',
@@ -122,20 +127,32 @@ OSM_TAGS = {
 
 
 def _get_city_coords(ville: str) -> tuple[str, str] | None:
+    global _last_geocoding_at
+    from .cache import cached_value, store_value
+    cache_name = f"city:{ville.strip().lower()}"
+    cached = cached_value(cache_name)
+    if cached:
+        return tuple(cached)
     try:
-        resp = requests.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={"q": ville, "format": "json", "limit": 1},
-            headers=REQUEST_HEADERS,
-            timeout=10,
-        )
+        with _geocoding_lock:
+            time.sleep(max(0, 1.1 - (time.monotonic() - _last_geocoding_at)))
+            _last_geocoding_at = time.monotonic()
+            resp = requests.get(
+                "https://nominatim.openstreetmap.org/search",
+                params={"q": ville, "format": "json", "limit": 1},
+                headers=REQUEST_HEADERS,
+                timeout=10,
+            )
+        resp.raise_for_status()
         data = resp.json()
         if not data:
             return None
-        return data[0]["lat"], data[0]["lon"]
+        coords = [data[0]["lat"], data[0]["lon"]]
+        store_value(cache_name, coords, hours=720)
+        return tuple(coords)
     except Exception as exc:
         logger.error("Nominatim error: %s", exc)
-        return None
+        raise ProspectionTemporaryError("Le service de localisation ne repond pas. Nouvelle tentative programmee.") from exc
 
 
 def _query_overpass(tag_filters: str | list[str], lat: str, lon: str, rayon_m: int) -> list[dict]:
@@ -237,15 +254,21 @@ def _find_email_pages_jaunes(nom: str, ville: str) -> str | None:
         )
     }
     url = (
-        f"https://www.pagesjaunes.fr/pagesblanches/recherche"
+        f"https://www.pagesjaunes.fr/annuaire/chercherlespros"
         f"?quoiqui={requests.utils.quote(nom)}&ou={requests.utils.quote(ville)}"
     )
     try:
         resp = requests.get(url, headers=headers, timeout=settings.PAGES_JAUNES_TIMEOUT)
+        resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
-        for link in soup.find_all("a", href=True):
-            if "mailto:" in link["href"]:
-                return link["href"].replace("mailto:", "").strip()
+        for result in soup.select("article, .bi-bloc"):
+            if not _social_result_matches_name(nom, result.get_text(" ", strip=True), ""):
+                continue
+            for link in result.find_all("a", href=True):
+                if link["href"].lower().startswith("mailto:"):
+                    email = _extract_email(unquote(link["href"][7:]).split("?")[0])
+                    if email:
+                        return email
     except Exception as exc:
         logger.warning("Pages Jaunes error for %s: %s", nom, exc)
     return None
@@ -466,10 +489,15 @@ def _word_matches_any(word: str, haystack_words: list[str]) -> bool:
     )
 
 
-def _find_email_on_website(website: str) -> str | None:
+def _find_email_on_website(website: str, with_source=False, force=False):
+    from .cache import cached_value, store_value
     start_url = _normalize_website_url(website)
     if not start_url:
-        return None
+        return (None, "") if with_source else None
+
+    cached = None if force else cached_value(f"website:{start_url}")
+    if cached is not None:
+        return (cached["email"], cached["source"]) if with_source else cached["email"]
 
     parsed_start = urlparse(start_url)
     base_url = f"{parsed_start.scheme}://{parsed_start.netloc}"
@@ -485,6 +513,7 @@ def _find_email_on_website(website: str) -> str | None:
         )
     )
     visited = set()
+    successful_pages = 0
 
     while urls_to_visit and len(visited) < settings.WEBSITE_EMAIL_MAX_PAGES:
         url = urls_to_visit.pop(0)
@@ -494,25 +523,42 @@ def _find_email_on_website(website: str) -> str | None:
         visited.add(url)
 
         try:
-            resp = requests.get(
-                url,
-                headers=REQUEST_HEADERS,
-                timeout=settings.WEBSITE_EMAIL_TIMEOUT,
-                allow_redirects=True,
-            )
+            resp = _get_public_page(url)
             resp.raise_for_status()
         except Exception as exc:
             logger.debug("Website email lookup error for %s: %s", url, exc)
             continue
+        successful_pages += 1
 
         email = _extract_email(resp.text)
         if email:
-            return email
+            store_value(f"website:{start_url}", {"email": email, "source": resp.url}, hours=336)
+            return (email, resp.url) if with_source else email
 
         if len(visited) == 1:
-            urls_to_visit.extend(_extract_contact_links(resp.text, resp.url, base_url))
+            redirected_base = f"{urlparse(resp.url).scheme}://{urlparse(resp.url).netloc}"
+            urls_to_visit = _extract_contact_links(resp.text, resp.url, redirected_base) + urls_to_visit
 
-    return None
+    if not successful_pages:
+        raise ProspectionTemporaryError("Site indisponible. Recherche d'email a retenter.")
+    store_value(f"website:{start_url}", {"email": None, "source": ""}, hours=24)
+    return (None, "") if with_source else None
+
+
+def _get_public_page(url):
+    # OSM URLs are untrusted: never let a remote listing reach local services.
+    for _ in range(5):
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("Adresse de site invalide.")
+        addresses = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+        if not addresses or any(not ipaddress.ip_address(item[4][0]).is_global for item in addresses):
+            raise ValueError("Les sites locaux et prives ne peuvent pas etre analyses.")
+        response = requests.get(url, headers=REQUEST_HEADERS, timeout=settings.WEBSITE_EMAIL_TIMEOUT, allow_redirects=False)
+        if response.status_code not in [301, 302, 303, 307, 308]:
+            return response
+        url = urljoin(url, response.headers.get("Location", ""))
+    raise ValueError("Trop de redirections.")
 
 
 def _normalize_website_url(website: str) -> str | None:
@@ -586,7 +632,8 @@ def run_prospection(campaign) -> dict:
     Scrape OSM + enrichit via Pages Jaunes, enregistre les Prospect en base.
     Retourne un dict de stats.
     """
-    from .models import Prospect  # import local pour éviter les imports circulaires
+    from .identity import capture_prospect
+    from .enrichment import enrich_prospect
 
     tag = OSM_TAGS.get(campaign.secteur.lower(), f'"shop"="{campaign.secteur}"')
     coords = _get_city_coords(campaign.ville)
@@ -597,84 +644,14 @@ def run_prospection(campaign) -> dict:
     lat, lon = coords
     rayon_m = campaign.rayon_km * 1000
     elements = _query_overpass(tag, lat, lon, rayon_m)
-    enrichment_deadline = time.monotonic() + settings.ENRICHMENT_TOTAL_TIMEOUT
-    website_email_lookups_left = settings.WEBSITE_EMAIL_MAX_LOOKUPS
-    pages_jaunes_lookups_left = settings.PAGES_JAUNES_MAX_LOOKUPS
-
-    created_total = 0
-    created_with_email = 0
-
+    discovered = {}
     for element in elements:
-        tags = element.get("tags", {})
-        nom = tags.get("name", "").strip()
-        if not nom:
-            continue
-
-        website = tags.get("website") or tags.get("contact:website") or None
-        email = tags.get("email") or tags.get("contact:email") or None
-
-        if (
-            not email
-            and website
-            and website_email_lookups_left > 0
-            and time.monotonic() < enrichment_deadline
-        ):
-            email = _find_email_on_website(website)
-            website_email_lookups_left -= 1
-
-        # On garde les structures avec site uniquement si le site donne un email.
-        if website and not email:
-            continue
-
-        # Enrichissement Pages Jaunes si pas d'email
-        if (
-            not email
-            and pages_jaunes_lookups_left > 0
-            and time.monotonic() < enrichment_deadline
-        ):
-            email = _find_email_pages_jaunes(nom, campaign.ville)
-            pages_jaunes_lookups_left -= 1
-            if settings.PAGES_JAUNES_DELAY_SECONDS > 0:
-                time.sleep(settings.PAGES_JAUNES_DELAY_SECONDS)
-
-        telephone = tags.get("phone") or tags.get("contact:phone") or ""
-
-        prospect, created = Prospect.objects.get_or_create(
-            campaign=campaign,
-            nom=nom,
-            defaults={
-                "adresse": tags.get("addr:street", ""),
-                "ville": tags.get("addr:city", campaign.ville),
-                "telephone": telephone,
-                "email": email or None,
-                "website": website,
-                "has_website": bool(website),
-            },
-        )
-
-        if not created:
-            update_fields = []
-            if email and not prospect.email:
-                prospect.email = email
-                update_fields.append("email")
-            if website and not prospect.website:
-                prospect.website = website
-                prospect.has_website = True
-                update_fields.extend(["website", "has_website"])
-            if telephone and not prospect.telephone:
-                prospect.telephone = telephone
-                update_fields.append("telephone")
-            if update_fields:
-                prospect.save(update_fields=update_fields)
-
-        created_total += 1
-        if prospect.email:
-            created_with_email += 1
-
-    return {
-        "total": created_total,
-        "with_email": created_with_email,
-    }
+        prospect = capture_prospect(campaign, element)
+        if prospect:
+            discovered[prospect.pk] = prospect
+    for prospect in discovered.values():
+        enrich_prospect(prospect)
+    return {"total": len(discovered), "with_email": sum(bool(p.email) for p in discovered.values())}
 
 
 # ── Envoi d'email ──────────────────────────────────────────────
@@ -684,39 +661,11 @@ def send_prospect_email(prospect, template) -> dict:
     Envoie un email à un prospect via le template donné.
     Retourne {"success": bool, "error": str}.
     """
-    from .models import EmailLog
-
-    if not prospect.email:
-        return {"success": False, "error": "Prospect sans email."}
-
-    subject, body = template.render(prospect)
-
-    log = EmailLog(
-        prospect=prospect,
-        template=template,
-        subject=subject,
-        body=body,
-    )
-
+    from uuid import uuid4
+    from .mail import send_message
     try:
-        send_mail(
-            subject=subject,
-            message=body,
-            from_email=None,  # utilise DEFAULT_FROM_EMAIL
-            recipient_list=[prospect.email],
-            fail_silently=False,
-        )
-        log.success = True
-        log.save()
-
-        # Met à jour le statut du prospect
-        prospect.status = "contacted"
-        prospect.save(update_fields=["status"])
-
+        subject, body = template.render(prospect)
+        send_message(prospect, subject, body, str(uuid4()), template)
         return {"success": True, "error": ""}
     except Exception as exc:
-        log.success = False
-        log.error_message = str(exc)
-        log.save()
-        logger.error("Email send error to %s: %s", prospect.email, exc)
         return {"success": False, "error": str(exc)}
