@@ -1,70 +1,208 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Check, Clock3, ExternalLink, RefreshCw, Search, X } from "lucide-react";
-import { decideQualification, errorMessage, getQualifications, runQualifications } from "./api";
+import { Check, Clock3, RefreshCw, Search, X } from "lucide-react";
+import { decideQualification, errorMessage, getQualifications, runQualifications, saveEmailDraft, saveQualificationEvidence } from "./api";
 import { Empty, IconButton, Loading, Notice, formatDate, externalUrl } from "./common";
 
-const priorities = { high: "Priorite haute", medium: "Priorite moyenne", low: "Priorite basse" };
-const tabs = [["pending", "A examiner"], ["deferred", "Reportes"]];
+const tabs = [
+  ["selection", "Sélection commerciale"], ["ready", "Toutes les propositions"], ["pilot", "Pilote commercial"],
+  ["enrich", "À enrichir"], ["deferred", "Reportés"],
+  ["no_opportunity", "Sans opportunité démontrée"], ["excluded", "Exclus"],
+];
+const outcome = { creation: "Création de site", refonte: "Refonte / amélioration" };
+const emptyProof = { origin: "human", search_url: "", contact_url: "", method: "", limits: "", confirmed: false };
+
+export function Evidence({ items }) {
+  const current = items.filter((item) => !item.historical);
+  const historical = items.filter((item) => item.historical);
+  const render = (rows) => rows.map((item, index) => <div className="p-qualification-evidence-item" key={index}>
+    <strong>{item.source}</strong> · {formatDate(item.observed_at)}
+    <small>{({ automatic: "Observation automatique", human: "Observation humaine", assisted: "Observation assistée" })[item.origin] || "Origine non renseignée"}</small>
+    <p>{item.detail}</p>
+    {item.method && <p>Méthode — {item.method}</p>}
+    {item.limits && <p>Limites — {item.limits}</p>}
+    {externalUrl(item.url) && <a className="p-link" href={externalUrl(item.url)} target="_blank" rel="noreferrer">Consulter la source</a>}
+  </div>);
+  return <div className="p-qualification-evidence">
+    <strong>Preuves et limites</strong>
+    {render(current)}
+    {historical.length > 0 && <details><summary>Observations précédentes ({historical.length})</summary>{render(historical)}</details>}
+  </div>;
+}
+
+function ReviewCard({ review, onUpdate, onDecision, dirty, setDirty, disabled }) {
+  const legacyDraft = Boolean(review.suggestion && review.draft?.body.includes("j'ai observe le point suivant"));
+  const [draft, setDraft] = useState((legacyDraft ? review.suggestion : review.draft) || review.suggestion || { subject: "", body: "" });
+  const [needsSave, setNeedsSave] = useState(legacyDraft);
+  const [proof, setProof] = useState(emptyProof);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const { prospect } = review;
+  const editable = Boolean(review.opportunity);
+  const actionable = ["ready", "enrich", "deferred"].includes(review.bucket);
+  const busy = working || disabled;
+
+  const act = async (operation) => {
+    setWorking(true); setError(""); setNotice("");
+    try { await operation(); }
+    catch (err) { setError(errorMessage(err)); }
+    finally { setWorking(false); }
+  };
+  const save = async () => {
+    await saveEmailDraft(prospect.id, { subject: draft.subject, body: draft.body });
+    setNeedsSave(false); setDirty(false); setNotice("Brouillon enregistré.");
+  };
+  const decide = (decision) => act(async () => {
+    if (dirty || decision === "approve" && needsSave) await save();
+    await onDecision(review, decision);
+  });
+  const change = (field, value) => { setDraft((previous) => ({ ...previous, [field]: value })); setDirty(true); };
+  const record = (value) => act(async () => {
+    await saveQualificationEvidence(review.id, value);
+    await onUpdate();
+  });
+
+  return <article className="p-section p-qualification-card">
+    <header className="p-section-head">
+      <div><h2>{prospect.nom}</h2><p>{prospect.ville} · {prospect.email || "Email manquant"}</p></div>
+      <strong>{outcome[review.opportunity] || tabs.find(([key]) => key === review.bucket)?.[1]}</strong>
+    </header>
+    {review.selection && <section className="p-settings-fields">
+      <h3>Rang {review.selection.rank} · {review.selection.signal}</h3>
+      <p>{review.selection.fit}</p>
+      <a className="p-link" href={review.selection.service.url} target="_blank" rel="noreferrer">
+        Prestation NateOS correspondante · {review.selection.service.title}
+      </a>
+      <ul>{review.selection.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
+      <p>Plus ancienne preuve nécessaire du {formatDate(review.selection.oldest_required_evidence_at)}.</p>
+      <details><summary>Preuves du classement</summary>
+        {review.selection.evidence.map((proof) => <p key={proof.id}>
+          {proof.source} · {formatDate(proof.observed_at)} · {proof.detail}{" "}
+          {externalUrl(proof.url) && <a className="p-link" href={externalUrl(proof.url)} target="_blank" rel="noreferrer">Source</a>}
+        </p>)}
+        <ul>{review.selection.limits.map((limit) => <li key={limit}>{limit}</li>)}</ul>
+      </details>
+    </section>}
+    <p className="p-qualification-meta">Analyse du {formatDate(review.checked_at)}</p>
+    {externalUrl(prospect.website) && <a className="p-link" href={externalUrl(prospect.website)} target="_blank" rel="noreferrer">Site renseigné</a>}
+    <ul className="p-qualification-reasons">{review.reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul>
+    <Evidence items={review.evidence} />
+    <Notice>{error}</Notice><Notice kind="success">{notice}</Notice>
+    {editable && <section className="p-settings-fields">
+      <h3>Brouillon</h3>
+      <label>Objet<input disabled={busy} value={draft.subject} maxLength={200} onChange={(e) => change("subject", e.target.value)} /></label>
+      <label>Message<textarea disabled={busy} rows={12} value={draft.body} maxLength={50000} onChange={(e) => change("body", e.target.value)} /></label>
+      <div className="p-actions">
+        {review.suggestion && <button className="p-button" disabled={busy} onClick={() => {
+          if (dirty && !window.confirm("Remplacer le texte non enregistré dans cet éditeur ?")) return;
+          setDraft(review.suggestion); setDirty(true);
+        }}>Charger le modèle proposé</button>}
+        <button className="p-button" disabled={busy || !(dirty || needsSave) || !draft.subject.trim() || !draft.body.trim()} onClick={() => act(save)}>Enregistrer le brouillon</button>
+      </div>
+      {legacyDraft && needsSave && <details className="p-qualification-draft">
+        <summary>Ancien brouillon conservé jusqu’à l’enregistrement</summary><pre>{review.draft.body}</pre>
+      </details>}
+    </section>}
+    {!editable && review.draft && <details className="p-qualification-draft">
+      <summary>Brouillon conservé · non prêt à envoyer</summary><strong>{review.draft.subject}</strong><pre>{review.draft.body}</pre>
+    </details>}
+    {actionable && !editable && prospect.website && <button className="p-button" disabled={busy} onClick={() => record({ check_site: true })}>Vérifier la page renseignée</button>}
+    {actionable && !editable && prospect.email && !prospect.website && <details>
+      <summary>Consigner une recherche publique</summary>
+      <form className="p-settings-fields" onSubmit={(e) => { e.preventDefault(); record(proof); }}>
+        {[["search_url", "Adresse de la recherche ou des résultats consultés"], ["contact_url", "Page qui publie l’adresse professionnelle"],
+          ["method", "Requêtes effectuées et critères d’identification"], ["limits", "Périmètre et limites de la recherche"]].map(([key, label]) =>
+          <label key={key}>{label}<input type={key.endsWith("_url") ? "url" : "text"} required disabled={busy}
+            value={proof[key]} onChange={(e) => setProof({ ...proof, [key]: e.target.value })} /></label>)}
+        <label><input type="checkbox" required checked={proof.confirmed} disabled={busy}
+          onChange={(e) => setProof({ ...proof, confirmed: e.target.checked })} /> J’ai vérifié l’identité et l’email publié. Aucun site officiel n’a été identifié dans les résultats consultés.</label>
+        <button className="p-button" disabled={busy}>Enregistrer les preuves</button>
+      </form>
+    </details>}
+    {actionable && <div className="p-actions p-form-footer">
+      {editable && <button className="p-button primary" disabled={busy || !draft.subject.trim() || !draft.body.trim()} onClick={() => decide("approve")}><Check size={15} /> Approuver</button>}
+      {review.bucket === "deferred"
+        ? <button className="p-button" disabled={busy} onClick={() => decide("reopen")}><RefreshCw size={15} /> Remettre à examiner</button>
+        : <button className="p-button" disabled={busy} onClick={() => decide("defer")}><Clock3 size={15} /> Reporter</button>}
+      <button className="p-button p-danger" disabled={busy} onClick={() => decide("reject")}><X size={15} /> Rejeter</button>
+    </div>}
+  </article>;
+}
 
 export default function Qualification() {
-  const navigate = useNavigate();
-  const [status, setStatus] = useState("pending");
+  const [status, setStatus] = useState("selection");
   const [data, setData] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [revision, setRevision] = useState(0);
+  const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(null);
   const [running, setRunning] = useState(false);
-
-  const load = (force = true) => getQualifications(status, force).then((value) => { setData(value); setError(""); }).catch((err) => setError(errorMessage(err)));
-  useEffect(() => { setData(null); load(); }, [status]);
+  const [busy, setBusy] = useState(false);
+  const fetchData = () => getQualifications(status, true);
+  const refresh = async () => { const value = await fetchData(); setData(value); };
+  const report = (err) => setError(errorMessage(err));
   useEffect(() => {
-    if (!running) return undefined;
-    const timer = setInterval(() => { load(true); }, 4000);
+    let current = true;
+    fetchData().then((value) => { if (current) setData(value); }).catch((err) => { if (current) report(err); });
+    return () => { current = false; };
+  }, [status]);
+  useEffect(() => {
+    if (!running || dirty) return undefined;
+    let current = true;
+    const timer = setInterval(() => fetchData().then((value) => { if (current) setData(value); }).catch(report), 4000);
     const stop = setTimeout(() => setRunning(false), 60000);
-    return () => { clearInterval(timer); clearTimeout(stop); };
-  }, [running, status]);
+    return () => { current = false; clearInterval(timer); clearTimeout(stop); };
+  }, [running, status, dirty]);
 
+  const changeSelection = (action) => {
+    if (dirty && !window.confirm("Quitter cette fiche sans enregistrer le brouillon ?")) return;
+    setDirty(false); setError(""); action();
+  };
   const run = async () => {
-    setBusy("run"); setMessage(""); setError("");
+    setBusy(true); setError(""); setMessage("");
     try {
       const result = await runQualifications();
-      setMessage(`${result.queued} analyse(s) ajoutee(s) a la file${result.remaining ? `; ${result.remaining} autre(s) attendent` : ""}. Aucun email ne sera envoye par cette analyse.`);
-      setRunning(result.queued > 0 || result.remaining > 0);
-      await load(true);
-    } catch (err) { setError(errorMessage(err)); }
-    finally { setBusy(null); }
+      setMessage(`${result.queued} analyse(s) dans la file${result.remaining ? ` · ${result.remaining} fiche(s) hors de ce lot` : ""}.`);
+      setRunning(result.queued > 0);
+      await refresh();
+    } catch (err) { report(err); }
+    finally { setBusy(false); }
   };
-
-  const decide = async (review, action) => {
-    setBusy(review.id); setError(""); setMessage("");
-    try { await decideQualification(review.id, action); await load(true); }
-    catch (err) { setError(errorMessage(err)); }
-    finally { setBusy(null); }
+  const results = data?.results || [];
+  const index = Math.max(0, results.findIndex((item) => item.id === selected));
+  const review = results[index];
+  const decide = async (item, decision) => {
+    await decideQualification(item.id, decision);
+    const next = results[index + 1]?.id || results[index - 1]?.id || null;
+    setSelected(next); setDirty(false); setMessage("Décision enregistrée.");
+    await refresh();
   };
-
-  const openDraft = (review) => navigate(`/prospects?open=${review.prospect.id}&tab=email`);
-
   return <div className="p-page">
-    <header className="p-heading"><div><h1>Qualification</h1><p>Observations verifiables et brouillons a relire</p></div><div className="p-actions">
-      <IconButton icon={RefreshCw} label="Actualiser" onClick={() => load(true)} />
-      <button className="p-button" disabled={busy === "run"} onClick={run}><Search size={16} /> Analyser les anciennes fiches</button>
+    <header className="p-heading"><div><h1>Qualification</h1><p>Preuves, brouillons et décisions</p></div><div className="p-actions">
+      <IconButton icon={RefreshCw} label="Actualiser" onClick={() => refresh().catch(report)} />
+      <button className="p-button" disabled={busy} onClick={run}><Search size={16} /> Analyser les anciennes fiches</button>
     </div></header>
     <Notice>{error}</Notice><Notice kind="success">{message}</Notice>
-    <div className="p-tabs">{tabs.map(([key, label]) => <button key={key} className={key === status ? "active" : ""} onClick={() => setStatus(key)}>{label}{key === status && data ? ` (${data.count})` : ""}</button>)}</div>
-    {!data ? <Loading /> : !data.results.length ? <Empty>{status === "pending" ? "Aucune proposition a examiner. Les nouvelles recherches seront qualifiees automatiquement." : "Aucune proposition reportee."}</Empty> : <div className="p-qualification-list">{data.results.map((review) => <article className="p-section p-qualification-card" key={review.id}>
-      <header className="p-section-head"><div><h2>{review.prospect.nom}</h2><p>{review.prospect.ville} · {review.prospect.email || "Email manquant"}</p></div><span className={`p-priority p-priority-${review.priority}`}>{priorities[review.priority] || "A examiner"}</span></header>
-      <p className="p-qualification-meta">Analyse du {formatDate(review.checked_at)} · Statut : {status === "deferred" ? "Reportee" : "A examiner"}</p>
-      <ul className="p-qualification-reasons">{review.reasons.map((reason, index) => <li key={`${review.id}-reason-${index}`}>{reason}</li>)}</ul>
-      <div className="p-qualification-evidence"><strong>Preuves et limites</strong>{review.evidence.map((evidence, index) => <div className="p-qualification-evidence-item" key={`${review.id}-evidence-${index}`}><div><b>{evidence.source}</b> · {formatDate(evidence.observed_at)}</div><p>{evidence.detail}</p>{externalUrl(evidence.url) && <a className="p-link" href={externalUrl(evidence.url)} target="_blank" rel="noreferrer">Ouvrir la page observee <ExternalLink size={13} /></a>}</div>)}</div>
-      {review.draft && <details className="p-qualification-draft"><summary>Brouillon prepare — a verifier avant tout envoi</summary><p><strong>Objet :</strong> {review.draft.subject}</p><pre>{review.draft.body}</pre></details>}
-      <div className="p-actions p-form-footer"><button className="p-button" onClick={() => openDraft(review)}><ExternalLink size={15} /> Relire la fiche et le message</button>
-        {status === "deferred" && <button className="p-button" disabled={busy === review.id} onClick={() => decide(review, "reopen")}><RefreshCw size={15} /> Remettre a examiner</button>}
-        <button className="p-button primary" disabled={busy === review.id} onClick={() => decide(review, "approve")}><Check size={15} /> Approuver le prospect</button>
-        {status === "pending" && <button className="p-button" disabled={busy === review.id} onClick={() => decide(review, "defer")}><Clock3 size={15} /> Reporter</button>}
-        <button className="p-button p-danger" disabled={busy === review.id} onClick={() => decide(review, "reject")}><X size={15} /> Rejeter</button>
+    {status === "selection" && data?.selection && <section className="p-section">
+      <h2>{data.count} opportunité(s) retenue(s) sur {data.selection.limit} maximum</h2>
+      <p>Preuves nécessaires de moins de {data.selection.max_evidence_age_days} jours et contact corroboré. Validation humaine requise.</p>
+      <details><summary>Critères de classement</summary>
+        <ol>{data.selection.criteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ol>
+        <p>{data.selection.held_by_limit} autre(s) dossier(s) justifié(s) au-delà des cinq places.</p>
+      </details>
+    </section>}
+    <div className="p-tabs">{tabs.map(([key, label]) => <button key={key} className={key === status ? "active" : ""}
+      onClick={() => key !== status && changeSelection(() => { setStatus(key); setSelected(null); setData(null); })}>{label}{data ? ` (${data.counts?.[key] ?? 0})` : ""}</button>)}</div>
+    {!data ? <Loading /> : !review ? <Empty>{status === "selection" ? "Aucune opportunité ne dispose actuellement de toutes les preuves nécessaires." : "Aucune fiche dans ce filtre."}</Empty> : <>
+      <div className="p-actions">
+        <button className="p-button" disabled={index === 0} onClick={() => changeSelection(() => setSelected(results[index - 1].id))}>Précédente</button>
+        <span>{index + 1} / {data.count}</span>
+        <button className="p-button" disabled={index >= results.length - 1} onClick={() => changeSelection(() => setSelected(results[index + 1].id))}>Suivante</button>
       </div>
-    </article>)}</div>}
-    <p className="p-qualification-note">Les recherches de site restent limitees aux pages publiques accessibles. Une panne ou une absence dans OpenStreetMap ne prouve pas qu'un site n'existe pas. L'analyse n'envoie aucun email.</p>
+      <ReviewCard key={`${review.id}-${revision}`} review={review} onUpdate={async () => {
+        const updated = await fetchData(); setData(updated); setRevision((value) => value + 1);
+      }} onDecision={decide} dirty={dirty} setDirty={setDirty} disabled={busy} />
+    </>}
   </div>;
 }

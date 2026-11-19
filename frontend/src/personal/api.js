@@ -26,6 +26,7 @@ export const controlJob = (id, action) => changed(api.post(`${root}/jobs/${id}/$
 export const getQualifications = (status = "pending", force = false) => cached(`${root}/qualification/`, { status }, force);
 export const runQualifications = () => changed(api.post(`${root}/qualification/run/`));
 export const decideQualification = (id, decision) => changed(api.post(`${root}/qualification/${id}/${decision}/`));
+export const saveQualificationEvidence = (id, data) => changed(api.post(`${root}/qualification/${id}/evidence/`, data));
 export const getEmailDraft = (id) => api.get(`${root}/contacts/${id}/draft/`).then((r) => r.data);
 export const saveEmailDraft = (id, data) => changed(api.put(`${root}/contacts/${id}/draft/`, data));
 export const getEmailSettings = () => api.get(`${root}/email-settings/`).then((r) => r.data);

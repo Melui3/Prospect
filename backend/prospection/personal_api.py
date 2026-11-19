@@ -2,7 +2,7 @@ from datetime import timedelta
 from email.utils import parseaddr
 
 from django.conf import settings
-from django.db.models import Case, Count, IntegerField, Q, Value, When
+from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Q, Value, When
 from django.utils import timezone
 from rest_framework import serializers, viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
@@ -11,11 +11,13 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 
+from .consultations import ConsultationError
 from .identity import identity_key
-from .jobs import REPEAT_INTERVAL_DAYS, enqueue_enrichment, enqueue_qualification, enqueue_search
+from .jobs import REPEAT_INTERVAL_DAYS, enqueue_enrichment, enqueue_qualification, enqueue_search, job_outcome, OUTCOME_LABELS
 from .mail import MailError, send_message, sync_delivery
 from .models import Campaign, EmailDraft, EmailLog, EmailTemplate, Prospect, ProspectEvent, QualificationReview, SearchJob
 from .private_config import brevo_key, save_private_settings, sender_address
+from .qualification import draft_suggestion, opportunity, prospect_is_eligible, qualify_prospect, record_creation_search, review_bucket
 from .views import is_owner_request
 
 CLOSED = ["won", "lost", "ignored", "do_not_contact"]
@@ -27,9 +29,27 @@ class OwnerOnly(BasePermission):
 
 
 class JobSerializer(serializers.ModelSerializer):
+    outcome = serializers.SerializerMethodField()
+    outcome_label = serializers.SerializerMethodField()
+    events = serializers.SerializerMethodField()
+    observations = serializers.SerializerMethodField()
+
+    def get_outcome(self, obj):
+        return job_outcome(obj)
+
+    def get_outcome_label(self, obj):
+        return OUTCOME_LABELS.get(job_outcome(obj), OUTCOME_LABELS["unrecorded"])
+
+    def get_observations(self, obj):
+        return obj.payload.get("discovery", {}).get("evidence", [])
+
+    def get_events(self, obj):
+        return obj.payload.get("events", [])
+
+
     class Meta:
         model = SearchJob
-        fields = ["id", "campaign", "prospect", "kind", "status", "stage", "total", "processed", "with_email", "attempts", "error", "updated_at", "next_run_at"]
+        fields = ["id", "campaign", "prospect", "kind", "status", "stage", "total", "processed", "with_email", "attempts", "error", "updated_at", "next_run_at", "outcome", "outcome_label", "events", "observations"]
 
 
 class LogSerializer(serializers.ModelSerializer):
@@ -120,12 +140,30 @@ class ContactDetailSerializer(ContactSerializer):
 
 
 class QualificationSerializer(serializers.ModelSerializer):
+    selection = serializers.SerializerMethodField()
+
+    def get_selection(self, obj):
+        return self.context.get("selection", {}).get(obj.pk)
+
     prospect = serializers.SerializerMethodField()
     draft = serializers.SerializerMethodField()
+    bucket = serializers.SerializerMethodField()
+    opportunity = serializers.SerializerMethodField()
+    suggestion = serializers.SerializerMethodField()
 
     class Meta:
         model = QualificationReview
-        fields = ["id", "status", "priority", "reasons", "evidence", "checked_at", "prospect", "draft"]
+        fields = ["id", "status", "priority", "reasons", "evidence", "checked_at", "prospect", "draft",
+                  "bucket", "opportunity", "suggestion", "selection"]
+
+    def get_bucket(self, obj):
+        return review_bucket(obj)
+
+    def get_opportunity(self, obj):
+        return opportunity(obj) if review_bucket(obj) in {"ready", "deferred"} else None
+
+    def get_suggestion(self, obj):
+        return draft_suggestion(obj) if self.get_opportunity(obj) else None
 
     def get_prospect(self, obj):
         item = obj.prospect
@@ -205,20 +243,20 @@ class ContactViewSet(viewsets.ModelViewSet):
         review = QualificationReview.objects.filter(prospect=prospect).first()
         if not review:
             return Response({"error": "Cette fiche doit d'abord etre analysee."}, status=409)
-        draft, _ = EmailDraft.objects.get_or_create(prospect=prospect)
+        draft = EmailDraft.objects.filter(prospect=prospect).first()
         if request.method == "PUT":
-            if review.status not in ["pending", "approved"]:
-                return Response({"error": "Seules les propositions a examiner ou approuvees peuvent etre modifiees."}, status=409)
+            can_edit = review.status == "approved" or review_bucket(review) in {"ready", "deferred"} and opportunity(review)
+            if not prospect.email or not can_edit:
+                return Response({"error": "Le brouillon requiert un contact et une qualification exploitables."}, status=409)
             serializer = EmailDraftSerializer(draft, data=request.data, partial=True)
             serializer.is_valid(raise_exception=True)
             if "subject" in serializer.validated_data:
                 subject = serializer.validated_data["subject"]
                 if "\n" in subject or "\r" in subject:
                     return Response({"error": "Le sujet doit tenir sur une seule ligne."}, status=400)
-            if draft.state == "sent":
-                draft.state = "draft"
-                draft.sent_at = None
-            draft = serializer.save(state="draft", sent_at=None)
+            draft = serializer.save(prospect=prospect, state="draft", sent_at=None)
+        if draft is None:
+            return Response({"subject": "", "body": "", "template": None, "state": "draft"})
         return Response(EmailDraftSerializer(draft).data)
 
     @action(detail=True, methods=["post"], url_path="send-email")
@@ -342,7 +380,7 @@ class JobViewSet(viewsets.ReadOnlyModelViewSet):
             job.stage = "Reprise programmee"
             job.error = ""
             job.attempts = 0
-            job.next_run_at = timezone.now()
+            job.next_run_at = max(job.next_run_at, timezone.now())
             job.save(update_fields=["status", "stage", "error", "attempts", "next_run_at", "updated_at"])
             if job.campaign_id:
                 Campaign.objects.filter(pk=job.campaign_id).update(status="queued", error_message="")
@@ -352,16 +390,79 @@ class JobViewSet(viewsets.ReadOnlyModelViewSet):
 @api_view(["GET"])
 @permission_classes([OwnerOnly])
 def qualification_queue(request):
-    status_filter = request.query_params.get("status", "pending")
-    if status_filter not in ["pending", "deferred"]:
+    status_filter = request.query_params.get("status", "ready")
+    if status_filter == "pending":
+        status_filter = "ready"
+    if status_filter not in {"selection", "ready", "enrich", "deferred", "excluded", "no_opportunity", "pilot"}:
         return Response({"error": "Filtre de qualification invalide."}, status=400)
-    qs = QualificationReview.objects.filter(status=status_filter, prospect__merged_into=None, prospect__status="new").exclude(
-        prospect__email_logs__isnull=False
-    ).filter(prospect__last_contacted_at__isnull=True).select_related("prospect").annotate(
-        priority_rank=Case(When(priority="high", then=Value(2)), When(priority="medium", then=Value(1)), default=Value(0), output_field=IntegerField())
-    ).order_by("-priority_rank", "-checked_at", "id").distinct()
-    results = list(qs[:100])
-    return Response({"count": qs.count(), "results": QualificationSerializer(results, many=True).data})
+    qs = QualificationReview.objects.select_related("prospect__email_draft", "prospect__campaign").annotate(
+        priority_rank=Case(When(priority="high", then=Value(2)), When(priority="medium", then=Value(1)), default=Value(0), output_field=IntegerField()),
+        has_outreach_attempt=Exists(EmailLog.objects.filter(prospect_id=OuterRef("prospect_id"))),
+    ).order_by("-priority_rank", "-checked_at", "id")
+    from .selection import select_opportunities
+    reviews = list(qs)
+    for review in reviews:
+        review.prospect.has_outreach_attempt = review.has_outreach_attempt
+    selected, selection_data, policy = select_opportunities(reviews)
+    counts = {"selection": len(selected)}
+    results = []
+    for review in reviews:
+        review.prospect.has_outreach_attempt = review.has_outreach_attempt
+        bucket = review_bucket(review)
+        in_pilot = any(row.get("kind") == "commercial_pilot" for row in review.evidence)
+        counts[bucket] = counts.get(bucket, 0) + 1
+        if in_pilot:
+            counts["pilot"] = counts.get("pilot", 0) + 1
+        if (bucket == status_filter or status_filter == "pilot" and in_pilot) and len(results) < 100:
+            results.append(review)
+    if status_filter == "selection":
+        results = selected
+    return Response({"count": counts.get(status_filter, 0), "counts": counts, "selection": policy,
+                     "results": QualificationSerializer(results, many=True, context={"selection": selection_data}).data})
+
+
+class CreationEvidenceSerializer(serializers.Serializer):
+    origin = serializers.ChoiceField(choices=["human", "assisted"], default="human")
+    search_url = serializers.URLField(max_length=2000)
+    contact_url = serializers.URLField(max_length=2000)
+    method = serializers.CharField(max_length=500)
+    limits = serializers.CharField(max_length=500)
+    confirmed = serializers.BooleanField()
+
+
+@api_view(["POST"])
+@permission_classes([OwnerOnly])
+def qualification_evidence(request, pk):
+    review = get_object_or_404(QualificationReview.objects.select_related("prospect"), pk=pk)
+    prospect = review.prospect
+    if review.status in {"approved", "rejected", "excluded"} or not prospect_is_eligible(prospect):
+        return Response({"error": "Cette proposition ne peut plus être réanalysée."}, status=409)
+    if request.data.get("discover") is True:
+        job = enqueue_qualification(prospect, discover=True, recheck=True)
+        if job is None:
+            return Response({"error": "Cette fiche ne peut pas être réexaminée automatiquement."}, status=409)
+        return Response(JobSerializer(job).data, status=202)
+    if request.data.get("check_site") is True:
+        if not (prospect.website or "").strip():
+            return Response({"error": "Aucun site renseigné à vérifier."}, status=400)
+        try:
+            updated = qualify_prospect(prospect, recheck=True)
+        except ConsultationError as exc:
+            return Response({
+                "error": str(exc),
+                "outcome": "temporary_error" if exc.temporary else "permanent_error",
+                "next_run_at": exc.retry_at,
+            }, status=503 if exc.temporary else 409)
+    else:
+        form = CreationEvidenceSerializer(data=request.data)
+        form.is_valid(raise_exception=True)
+        values = dict(form.validated_data)
+        if not values.pop("confirmed") or not (prospect.email or "").strip() or (prospect.website or "").strip():
+            return Response({"error": "Confirme la recherche publique et l’email corroboré sur une fiche sans site renseigné."}, status=400)
+        if any(not values[key].lower().startswith(("https://", "http://")) for key in ("search_url", "contact_url")):
+            return Response({"error": "Les deux sources doivent être des adresses HTTP ou HTTPS."}, status=400)
+        updated = record_creation_search(prospect, **values)
+    return Response(QualificationSerializer(updated).data)
 
 
 @api_view(["POST"])
@@ -369,7 +470,7 @@ def qualification_queue(request):
 def qualification_run(request):
     qs = Prospect.objects.filter(merged_into=None, status="new", qualification__isnull=True, last_contacted_at__isnull=True).exclude(email_logs__isnull=False).order_by("pk")
     prospects = list(qs[:100])
-    queued = sum(enqueue_qualification(item) is not None for item in prospects)
+    queued = sum(enqueue_qualification(item, discover=True) is not None for item in prospects)
     return Response({"queued": queued, "remaining": max(0, qs.count() - len(prospects))}, status=202)
 
 
@@ -380,8 +481,14 @@ def qualification_decision(request, pk, decision):
     allowed = {"approve": "approved", "reject": "rejected", "defer": "deferred", "reopen": "pending"}
     if decision not in allowed:
         return Response({"error": "Decision invalide."}, status=400)
-    if decision == "approve" and review.status not in ["pending", "deferred"]:
-        return Response({"error": "Cette proposition n'est plus en attente de validation."}, status=409)
+    if decision == "approve":
+        if review.status not in {"pending", "deferred"} or not prospect_is_eligible(review.prospect) or not opportunity(review):
+            return Response({"error": "Une preuve commerciale et un contact corroboré sont nécessaires."}, status=409)
+        draft = EmailDraft.objects.filter(prospect=review.prospect, state="draft").first()
+        if not draft or not draft.subject.strip() or not draft.body.strip() or "j'ai observe le point suivant" in draft.body:
+            return Response({"error": "Relis et enregistre un brouillon adapté avant d’approuver."}, status=409)
+    if decision in {"reject", "defer"} and review_bucket(review) not in {"ready", "enrich", "deferred"}:
+        return Response({"error": "Cette proposition n’est plus à examiner."}, status=409)
     if decision == "reopen" and review.status != "deferred":
         return Response({"error": "Seule une proposition reportee peut etre reouverte."}, status=409)
     review.status = allowed[decision]
@@ -403,7 +510,20 @@ def today(request):
         "due": ContactSerializer(due.order_by("next_followup_at")[:10], many=True).data,
         "contactable": ContactSerializer(fresh.order_by("-priority_rank", "-created_at")[:10], many=True).data,
         "pipeline": list(Prospect.objects.filter(merged_into=None).values("status").annotate(count=Count("id"))),
-        "jobs": JobSerializer(SearchJob.objects.filter(status__in=["queued", "running", "paused"])[:10], many=True).data,
+        "job_counts": {
+            row["status"]: row["count"]
+            for row in SearchJob.objects.order_by().values("status").annotate(count=Count("id"))
+        },
+        "jobs": JobSerializer(
+            SearchJob.objects.filter(status__in=["queued", "running", "paused"])
+            .annotate(display_order=Case(When(status="running", then=Value(0)), default=Value(1)))
+            .order_by("display_order", "created_at", "pk")[:10],
+            many=True,
+        ).data,
+        "recent_jobs": JobSerializer(
+            SearchJob.objects.filter(status__in=["done", "error"]).order_by("-updated_at", "-pk")[:5],
+            many=True,
+        ).data,
     })
 
 

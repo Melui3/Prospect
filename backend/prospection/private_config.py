@@ -11,6 +11,10 @@ from email.utils import formataddr
 settings_lock = threading.RLock()
 
 
+class PrivateSettingsProtectionError(ValueError):
+    pass
+
+
 class Blob(ctypes.Structure):
     _fields_ = [("size", wintypes.DWORD), ("data", ctypes.POINTER(ctypes.c_ubyte))]
 
@@ -21,9 +25,38 @@ def protect(data, decrypt=False):
     buffer = ctypes.create_string_buffer(data)
     source = Blob(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)))
     target = Blob()
-    crypt = ctypes.windll.crypt32.CryptUnprotectData if decrypt else ctypes.windll.crypt32.CryptProtectData
+    crypt32 = ctypes.WinDLL("crypt32", use_last_error=True)
+    if decrypt:
+        crypt = crypt32.CryptUnprotectData
+        crypt.argtypes = [
+            ctypes.POINTER(Blob),
+            ctypes.POINTER(wintypes.LPWSTR),
+            ctypes.POINTER(Blob),
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(Blob),
+        ]
+    else:
+        crypt = crypt32.CryptProtectData
+        crypt.argtypes = [
+            ctypes.POINTER(Blob),
+            wintypes.LPCWSTR,
+            ctypes.POINTER(Blob),
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(Blob),
+        ]
+    crypt.restype = wintypes.BOOL
     if not crypt(ctypes.byref(source), None, None, None, None, 1, ctypes.byref(target)):
-        raise ValueError("Impossible d'acceder aux reglages proteges de ce compte Windows.")
+        error_code = ctypes.get_last_error() & 0xFFFFFFFF
+        operation = "dechiffrer" if decrypt else "chiffrer"
+        raise PrivateSettingsProtectionError(
+            f"DPAPI n'a pas pu {operation} les reglages proteges "
+            f"(erreur Windows 0x{error_code:08X}). Le fichier reste inchange; "
+            "verifiez le compte Windows et son profil d'origine."
+        )
     try:
         return ctypes.string_at(target.data, target.size)
     finally:

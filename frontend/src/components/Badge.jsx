@@ -16,6 +16,8 @@ const labels = {
   ignored: "Ignoré",
   draft: "Brouillon",
   running: "En cours…",
+  queued: "En attente",
+  paused: "En pause",
   done: "Terminée",
   error: "Erreur",
 };

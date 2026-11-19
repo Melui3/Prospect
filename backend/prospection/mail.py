@@ -28,7 +28,8 @@ def mark_contacted(prospect):
 
 
 def send_message(prospect, subject, body, request_key, template=None, force=False, manual=False, approval_confirmed=False):
-    if prospect.status == "do_not_contact":
+    from .opposition import is_opposed
+    if prospect.status == "do_not_contact" or is_opposed(prospect.nom, prospect.ville, prospect.email, prospect.website):
         raise MailError("Cette fiche est marquee Ne plus contacter.")
     if not prospect.email:
         raise MailError("Prospect sans email.")

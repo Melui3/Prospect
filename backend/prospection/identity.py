@@ -37,6 +37,8 @@ def capture_prospect(campaign, element):
     website = website if len(website) <= 500 else ""
     email = email if len(email) <= 254 else ""
     phone = (tags.get("phone") or tags.get("contact:phone") or "")[:50]
+    from .opposition import is_opposed
+    opposed = is_opposed(name, city, email, website)
     if item is None:
         item = Prospect.objects.create(
             campaign=campaign, identity_key=key, external_id=external,
@@ -45,9 +47,14 @@ def capture_prospect(campaign, element):
             email_source="OpenStreetMap" if email else "",
             email_verified_at=timezone.now() if email else None,
             enrichment_status="found" if email else "pending", raw_tags=tags,
+            status="do_not_contact" if opposed else "new",
         )
     else:
         changed = []
+        if opposed and item.status != "do_not_contact":
+            item.status = "do_not_contact"
+            item.next_followup_at = None
+            changed.extend(["status", "next_followup_at"])
         for field, value in [("email", email), ("website", website), ("telephone", phone), ("external_id", external)]:
             if value and not getattr(item, field):
                 setattr(item, field, value)

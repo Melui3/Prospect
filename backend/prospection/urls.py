@@ -22,6 +22,7 @@ urlpatterns = [
     path("personal/", include(personal_router.urls)),
     path("personal/qualification/", personal_api.qualification_queue),
     path("personal/qualification/run/", personal_api.qualification_run),
+    path("personal/qualification/<int:pk>/evidence/", personal_api.qualification_evidence),
     path("personal/qualification/<int:pk>/<str:decision>/", personal_api.qualification_decision),
     path("personal/today/", personal_api.today),
     path("personal/email-settings/", personal_api.email_settings),

@@ -2,6 +2,7 @@ from django.utils import timezone
 from django.db import transaction
 from .models import Prospect, ProspectEvent
 from .services import _find_email_on_website, _find_email_pages_jaunes
+from .consultations import ConsultationError
 
 
 def enrich_prospect(prospect, force=False):
@@ -16,6 +17,8 @@ def enrich_prospect(prospect, force=False):
             email = _find_email_pages_jaunes(prospect.nom, prospect.ville)
             if email:
                 source = "Pages Jaunes"
+    except ConsultationError:
+        raise
     except Exception:
         failed = True
     # A lookup can take several seconds; do not overwrite edits made in the meantime.

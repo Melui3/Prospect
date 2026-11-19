@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, unquote, urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 from django.conf import settings
+from .consultations import ConsultationError, request
 
 logger = logging.getLogger(__name__)
 
@@ -137,8 +138,8 @@ def _get_city_coords(ville: str) -> tuple[str, str] | None:
         with _geocoding_lock:
             time.sleep(max(0, 1.1 - (time.monotonic() - _last_geocoding_at)))
             _last_geocoding_at = time.monotonic()
-            resp = requests.get(
-                "https://nominatim.openstreetmap.org/search",
+            resp = request("GET",
+                "https://nominatim.openstreetmap.org/search", source="nominatim",
                 params={"q": ville, "format": "json", "limit": 1},
                 headers=REQUEST_HEADERS,
                 timeout=10,
@@ -150,6 +151,8 @@ def _get_city_coords(ville: str) -> tuple[str, str] | None:
         coords = [data[0]["lat"], data[0]["lon"]]
         store_value(cache_name, coords, hours=720)
         return tuple(coords)
+    except ConsultationError:
+        raise
     except Exception as exc:
         logger.error("Nominatim error: %s", exc)
         raise ProspectionTemporaryError("Le service de localisation ne repond pas. Nouvelle tentative programmee.") from exc
@@ -167,6 +170,8 @@ def _query_overpass(tag_filters: str | list[str], lat: str, lon: str, rayon_m: i
         for element in _query_overpass_filters(tag_filters, lat, lon, rayon_m, deadline):
             element_key = (element.get("type"), element.get("id"))
             elements_by_key[element_key] = element
+    except ConsultationError:
+        raise
     except Exception as exc:
         logger.warning("Overpass filters error for %s: %s", ", ".join(tag_filters), exc)
         errors.append(str(exc))
@@ -216,8 +221,8 @@ def _query_overpass_filters(
             break
 
         try:
-            resp = requests.post(
-                endpoint,
+            resp = request("POST",
+                endpoint, source="overpass",
                 data=query.encode("utf-8"),
                 headers={**REQUEST_HEADERS, "Content-Type": "text/plain; charset=utf-8"},
                 timeout=max(
@@ -230,12 +235,17 @@ def _query_overpass_filters(
                 ),
             )
             resp.raise_for_status()
-            elements = resp.json().get("elements", [])
+            data = resp.json()
+            if not isinstance(data, dict) or not isinstance(data.get("elements"), list):
+                raise ConsultationError("Réponse Overpass inexploitable.", temporary=True, source="overpass")
+            elements = data["elements"]
             if elements:
                 return elements
 
             had_empty_response = True
             logger.info("Overpass empty result on %s; trying next mirror", endpoint)
+        except ConsultationError:
+            raise
         except Exception as exc:
             logger.warning("Overpass error on %s: %s", endpoint, exc)
             errors.append(f"{endpoint}: {exc}")
@@ -258,7 +268,7 @@ def _find_email_pages_jaunes(nom: str, ville: str) -> str | None:
         f"?quoiqui={requests.utils.quote(nom)}&ou={requests.utils.quote(ville)}"
     )
     try:
-        resp = requests.get(url, headers=headers, timeout=settings.PAGES_JAUNES_TIMEOUT)
+        resp = request("GET", url, source="pages_jaunes", headers=headers, timeout=settings.PAGES_JAUNES_TIMEOUT)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         for result in soup.select("article, .bi-bloc"):
@@ -269,6 +279,8 @@ def _find_email_pages_jaunes(nom: str, ville: str) -> str | None:
                     email = _extract_email(unquote(link["href"][7:]).split("?")[0])
                     if email:
                         return email
+    except ConsultationError:
+        raise
     except Exception as exc:
         logger.warning("Pages Jaunes error for %s: %s", nom, exc)
     return None
@@ -304,8 +316,8 @@ def _find_social_web(nom: str, ville: str) -> tuple[str | None, str]:
     query = f'"{nom}" "{ville}" {" ".join(SOCIAL_SEARCH_TARGETS)}'
 
     try:
-        resp = requests.get(
-            "https://search.brave.com/search",
+        resp = request("GET",
+            "https://search.brave.com/search", source="social_search",
             params={"q": query, "source": "web"},
             headers={
                 **REQUEST_HEADERS,
@@ -320,6 +332,8 @@ def _find_social_web(nom: str, ville: str) -> tuple[str | None, str]:
         if resp.status_code == 429:
             raise SocialSearchRateLimited("Brave Search rate limit")
         resp.raise_for_status()
+    except ConsultationError:
+        raise
     except SocialSearchRateLimited:
         raise
     except Exception as exc:
@@ -525,6 +539,10 @@ def _find_email_on_website(website: str, with_source=False, force=False):
         try:
             resp = _get_public_page(url)
             resp.raise_for_status()
+        except ConsultationError as exc:
+            if exc.http_status in {404, 410}:
+                continue
+            raise
         except Exception as exc:
             logger.debug("Website email lookup error for %s: %s", url, exc)
             continue
@@ -545,7 +563,7 @@ def _find_email_on_website(website: str, with_source=False, force=False):
     return (None, "") if with_source else None
 
 
-def _get_public_page(url):
+def _get_public_page(url, *, before_request=None, source="website"):
     # OSM URLs are untrusted: never let a remote listing reach local services.
     for _ in range(5):
         parsed = urlparse(url)
@@ -554,7 +572,10 @@ def _get_public_page(url):
         addresses = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
         if not addresses or any(not ipaddress.ip_address(item[4][0]).is_global for item in addresses):
             raise ValueError("Les sites locaux et prives ne peuvent pas etre analyses.")
-        response = requests.get(url, headers=REQUEST_HEADERS, timeout=settings.WEBSITE_EMAIL_TIMEOUT, allow_redirects=False)
+        minimum_interval = before_request(url) if before_request else 0
+        response = request("GET", url, source=source, headers=REQUEST_HEADERS,
+                           timeout=settings.WEBSITE_EMAIL_TIMEOUT, allow_redirects=False,
+                           minimum_interval=minimum_interval)
         if response.status_code not in [301, 302, 303, 307, 308]:
             return response
         url = urljoin(url, response.headers.get("Location", ""))
@@ -628,33 +649,12 @@ def _is_probable_contact_email(email: str) -> bool:
 
 
 def run_prospection(campaign) -> dict:
-    """
-    Scrape OSM + enrichit via Pages Jaunes, enregistre les Prospect en base.
-    Retourne un dict de stats.
-    """
-    from .identity import capture_prospect
-    from .enrichment import enrich_prospect
+    """Queue the persistent search and return its current counters."""
+    from .jobs import enqueue_search
+    job = enqueue_search(campaign)
+    return {"job_id": job.pk, "status": job.status,
+            "total": job.total, "with_email": job.with_email}
 
-    tag = OSM_TAGS.get(campaign.secteur.lower(), f'"shop"="{campaign.secteur}"')
-    coords = _get_city_coords(campaign.ville)
-
-    if not coords:
-        raise ValueError(f"Ville introuvable : {campaign.ville}")
-
-    lat, lon = coords
-    rayon_m = campaign.rayon_km * 1000
-    elements = _query_overpass(tag, lat, lon, rayon_m)
-    discovered = {}
-    for element in elements:
-        prospect = capture_prospect(campaign, element)
-        if prospect:
-            discovered[prospect.pk] = prospect
-    for prospect in discovered.values():
-        enrich_prospect(prospect)
-    return {"total": len(discovered), "with_email": sum(bool(p.email) for p in discovered.values())}
-
-
-# ── Envoi d'email ──────────────────────────────────────────────
 
 def send_prospect_email(prospect, template) -> dict:
     """

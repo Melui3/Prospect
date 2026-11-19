@@ -164,3 +164,24 @@ DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default=EMAIL_HOST_USER)
 EMAIL_TIMEOUT = 20
 BREVO_API_KEY = config("BREVO_API_KEY", default="")
 BACKUP_DIR = BASE_DIR / "backups"
+
+
+# Persistent consultation limits shared by all search entry points.
+HTTP_BUDGET_WINDOW = config("HTTP_BUDGET_WINDOW", default=3600, cast=int)
+HTTP_DOMAIN_BUDGET = config("HTTP_DOMAIN_BUDGET", default=30, cast=int)
+HTTP_SOURCE_BUDGET = config("HTTP_SOURCE_BUDGET", default=60, cast=int)
+HTTP_JOB_BUDGET = config("HTTP_JOB_BUDGET", default=500, cast=int)
+HTTP_DOMAIN_INTERVAL = config("HTTP_DOMAIN_INTERVAL", default=1.1, cast=float)
+HTTP_SOURCE_INTERVAL = config("HTTP_SOURCE_INTERVAL", default=1.1, cast=float)
+
+# The discovery provider is the existing public search, without a paid API.
+DISCOVERY_MAX_CANDIDATES = config("DISCOVERY_MAX_CANDIDATES", default=4, cast=int)
+DISCOVERY_EXTRA_PAGES = config("DISCOVERY_EXTRA_PAGES", default=2, cast=int)
+DISCOVERY_SEARCH_MAX_QUERIES = config("DISCOVERY_SEARCH_MAX_QUERIES", default=1, cast=int)
+DISCOVERY_DIRECTORY_HOSTS = tuple(config(
+    "DISCOVERY_DIRECTORY_HOSTS",
+    default="annuaire-restos.fr,restaurantguru.com,pagesjaunes.fr",
+).split(","))
+
+# Required proof age for the read-only commercial shortlist.
+SELECTION_EVIDENCE_MAX_AGE_DAYS = config("SELECTION_EVIDENCE_MAX_AGE_DAYS", default=30, cast=int)

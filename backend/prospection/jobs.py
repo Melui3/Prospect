@@ -1,11 +1,37 @@
 from datetime import timedelta
+import logging
+import random
 
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 
+from .consultations import ConsultationError, job_consultations
 from .models import Campaign, Prospect, QualificationReview, SearchJob
 
+logger = logging.getLogger(__name__)
 REPEAT_INTERVAL_DAYS = {7, 14, 30}
+OUTCOME_LABELS = {
+    "verified": "Succès vérifié",
+    "no_results": "Aucun résultat dans le périmètre interrogé",
+    "insufficient_evidence": "Preuves insuffisantes",
+    "temporary_error": "Erreur temporaire",
+    "excluded": "Opposition ou exclusion",
+    "permanent_error": "Échec définitif documenté",
+    "unrecorded": "Résultat historique non qualifié",
+}
+
+
+def job_outcome(job):
+    return job.payload.get("outcome", "unrecorded")
+
+
+def record_outcome(job, outcome, **details):
+    job.payload["outcome"] = outcome
+    event = {"at": timezone.now().isoformat(), "outcome": outcome, **details}
+    job.payload["events"] = (job.payload.get("events", []) + [event])[-30:]
+    checkpoint(job, payload=job.payload)
+
 
 
 class JobPaused(Exception):
@@ -22,15 +48,15 @@ def checkpoint(job, **values):
 
 @transaction.atomic
 def enqueue_search(campaign):
+    # Acquire the campaign write lock before checking for an active job on SQLite.
+    Campaign.objects.filter(pk=campaign.pk).update(status=F("status"))
     active = campaign.jobs.filter(status__in=["queued", "running", "paused"]).first()
     if active:
         if active.status == "paused":
             active.status = "queued"
             active.stage = "Reprise programmee"
             active.error = ""
-            active.attempts = 0
-            active.next_run_at = timezone.now()
-            active.save(update_fields=["status", "stage", "error", "attempts", "next_run_at", "updated_at"])
+            active.save(update_fields=["status", "stage", "error", "updated_at"])
             Campaign.objects.filter(pk=campaign.pk).update(status="queued", error_message="")
         return active
     job = SearchJob.objects.create(campaign=campaign)
@@ -63,10 +89,10 @@ def enqueue_due_scheduled_searches(now=None):
     for campaign in campaigns:
         if not Campaign.objects.filter(pk=campaign.pk, next_search_at__lte=now).exists():
             continue
-        campaign.next_search_at = None
-        campaign.save(update_fields=["next_search_at"])
         if campaign.jobs.filter(status__in=["queued", "running", "paused"]).exists():
             continue
+        campaign.next_search_at = None
+        campaign.save(update_fields=["next_search_at"])
         enqueue_search(campaign)
         enqueued += 1
     return enqueued
@@ -80,15 +106,18 @@ def enqueue_enrichment(prospect):
     return SearchJob.objects.create(prospect=prospect, kind="enrichment", total=1, payload={"force": True})
 
 
-def enqueue_qualification(prospect):
+def enqueue_qualification(prospect, *, discover=False, recheck=False):
     from .qualification import prospect_is_eligible
 
-    if not prospect_is_eligible(prospect) or QualificationReview.objects.filter(prospect=prospect).exists():
+    if not prospect_is_eligible(prospect):
+        return None
+    existing = QualificationReview.objects.filter(prospect=prospect).first()
+    if existing and not (discover and recheck and existing.status in {"pending", "unverified"}):
         return None
     active = prospect.jobs.filter(kind="qualification", status__in=["queued", "running", "paused"]).first()
     if active:
         return active
-    return SearchJob.objects.create(prospect=prospect, kind="qualification", total=1)
+    return SearchJob.objects.create(prospect=prospect, kind="qualification", total=1, payload={"discover": discover})
 
 
 def process_search(job):
@@ -103,7 +132,7 @@ def process_search(job):
         if not coords:
             raise ValueError(f"Ville introuvable : {campaign.ville}")
         elements = _query_overpass(OSM_TAGS.get(campaign.secteur.lower(), f'"shop"="{campaign.secteur}"'), *coords, campaign.rayon_km * 1000)
-        payload = {"elements": elements, "capture_index": 0, "ids": [], "enrich_index": 0}
+        payload.update({"elements": elements, "capture_index": 0, "ids": [], "enrich_index": 0})
         checkpoint(job, payload=payload, total=len(elements), stage="Enregistrement des pistes")
     for index in range(payload["capture_index"], len(payload["elements"])):
         checkpoint(job, stage="Enregistrement des pistes")
@@ -117,66 +146,141 @@ def process_search(job):
         checkpoint(job, stage="Recherche des emails")
         item = Prospect.objects.filter(pk=payload["ids"][index], merged_into=None).first()
         if item:
-            enrich_prospect(item)
-            enqueue_qualification(item)
+            from .qualification import prospect_is_eligible
+            if prospect_is_eligible(item):
+                enqueue_qualification(item, discover=True)
+            else:
+                payload.setdefault("excluded_ids", [])
+                if item.pk not in payload["excluded_ids"]:
+                    payload["excluded_ids"].append(item.pk)
         payload["enrich_index"] = index + 1
         with_email = Prospect.objects.filter(pk__in=payload["ids"]).exclude(email=None).exclude(email="").count()
         checkpoint(job, payload=payload, processed=index + 1, with_email=with_email)
 
 
 def run_next_job():
-    from .enrichment import enrich_prospect
     enqueue_due_scheduled_searches()
-    with transaction.atomic():
-        job = SearchJob.objects.filter(status="queued", next_run_at__lte=timezone.now()).order_by("created_at").first()
-        if not job:
-            return False
-        job.status = "running"
-        job.attempts += 1
-        job.error = ""
-        job.save(update_fields=["status", "attempts", "error", "updated_at"])
+    now = timezone.now()
+    ready = SearchJob.objects.filter(status="queued", next_run_at__lte=now)
+    job_id = ready.order_by("created_at", "pk").values_list("pk", flat=True).first()
+    if job_id is None:
+        return False
+    # Keep the read outside a write transaction. SQLite cannot always upgrade
+    # a read transaction when the desktop API is writing to the same database.
+    claimed = ready.filter(pk=job_id).update(
+        status="running", error="",
+        stage="En cours", updated_at=now,
+    )
+    if not claimed:
+        return False
+    job = SearchJob.objects.get(pk=job_id)
     if job.campaign:
         Campaign.objects.filter(pk=job.campaign_id).update(status="running", error_message="")
     try:
-        if job.kind == "search":
-            process_search(job)
-        elif job.kind == "qualification":
-            from .qualification import qualify_prospect
-            qualify_prospect(job.prospect)
-            checkpoint(job, processed=1)
-        else:
-            enrich_prospect(job.prospect, force=job.payload.get("force", False))
-            if job.prospect.enrichment_status == "error":
-                from .services import ProspectionTemporaryError
-                raise ProspectionTemporaryError("Le site ne repond pas. Recherche d'email a retenter.")
-            checkpoint(job, processed=1, with_email=int(bool(job.prospect.email)))
-        checkpoint(job, stage="Terminee")
-        completed = SearchJob.objects.filter(pk=job.pk, status="running").update(status="done", updated_at=timezone.now())
-        if completed and job.campaign:
-            Campaign.objects.filter(pk=job.campaign_id).update(status="done", error_message="")
-            _set_next_search(job.campaign_id)
+        with job_consultations(job):
+            _process_job(job)
     except JobPaused:
         if job.campaign:
             state = SearchJob.objects.filter(pk=job.pk).values_list("status", flat=True).first()
             Campaign.objects.filter(pk=job.campaign_id).update(status=state or "paused")
     except Exception as exc:
-        retry = job.attempts < 3 and not isinstance(exc, ValueError)
-        changed = SearchJob.objects.filter(pk=job.pk, status="running").update(
-            status="queued" if retry else "error", error=str(exc)[:1000],
-            stage="Nouvelle tentative programmee" if retry else "Interrompue",
-            next_run_at=timezone.now() + timedelta(seconds=30 * job.attempts), updated_at=timezone.now(),
+        deferred = isinstance(exc, ConsultationError) and exc.deferred
+        temporary = (
+            exc.temporary if isinstance(exc, ConsultationError) else not isinstance(exc, ValueError)
         )
+        attempts = job.attempts + (0 if deferred else 1)
+        retry = temporary and attempts < 3
+        delay = min(900, 30 * 2 ** min(attempts, 5)) + random.uniform(0, 5)
+        deadline = timezone.now() + timedelta(seconds=delay)
+        if isinstance(exc, ConsultationError) and exc.retry_at:
+            deadline = exc.retry_at if deferred else max(deadline, exc.retry_at)
+        outcome = "temporary_error" if retry else "permanent_error"
+        event = {"at": timezone.now().isoformat(), "outcome": outcome,
+                 "source": getattr(exc, "source", ""), "http_status": getattr(exc, "http_status", None),
+                 "reason": str(exc)[:1000], "retry_at": deadline.isoformat() if retry else None}
+        job.payload["events"] = (job.payload.get("events", []) + [event])[-30:]
+        job.payload["outcome"] = outcome
+        changed = SearchJob.objects.filter(pk=job.pk, status="running").update(
+            status="queued" if retry else "error", error=str(exc)[:1000], attempts=attempts,
+            stage=OUTCOME_LABELS[outcome], payload=job.payload,
+            next_run_at=deadline, updated_at=timezone.now(),
+        )
+        logger.warning("Tâche %s résultat=%s source=%s HTTP=%s reprise=%s",
+                       job.pk, outcome, event["source"], event["http_status"], event["retry_at"])
         if changed and job.campaign:
-            Campaign.objects.filter(pk=job.campaign_id).update(status="queued" if retry else "error", error_message=str(exc)[:1000])
+            Campaign.objects.filter(pk=job.campaign_id).update(
+                status="queued" if retry else "error", error_message=str(exc)[:1000])
             if not retry:
                 _set_next_search(job.campaign_id)
     return True
 
 
+def _process_job(job):
+    from .enrichment import enrich_prospect
+
+    if job.kind == "search":
+        process_search(job)
+        outcome = "no_results"
+        if job.payload.get("ids"):
+            all_excluded = set(job.payload["ids"]) <= set(job.payload.get("excluded_ids", []))
+            outcome = "excluded" if all_excluded else "insufficient_evidence"
+        final_stage = "Recherche terminée, qualification séparée" if outcome == "insufficient_evidence" else OUTCOME_LABELS[outcome]
+    elif job.kind == "qualification":
+        from .qualification import opportunity, qualify_prospect
+        if job.payload.get("discover"):
+            from .discovery import discover_prospect
+            review = discover_prospect(job)
+        else:
+            review = qualify_prospect(job.prospect)
+        final_stage = {
+            "pending": "Proposition a examiner",
+            "excluded": "Fiche exclue",
+            "no_opportunity": "Aucun signal pertinent",
+            "unverified": "À enrichir",
+        }.get(review.status, "Qualification deja decidee")
+        outcome = "insufficient_evidence"
+        if review.status in {"excluded", "rejected"}:
+            outcome = "excluded"
+        elif opportunity(review):
+            outcome = "verified"
+        checkpoint(job, processed=1)
+    elif job.kind == "enrichment":
+        enrich_prospect(job.prospect, force=job.payload.get("force", False))
+        if job.prospect.enrichment_status == "error":
+            from .services import ProspectionTemporaryError
+            raise ProspectionTemporaryError("Le site ne repond pas. Recherche d'email a retenter.")
+        outcome = "verified" if job.prospect.email else "no_results"
+        final_stage = "Email trouvé, qualification séparée" if job.prospect.email else "Aucun email trouvé dans le périmètre"
+        checkpoint(job, processed=1, with_email=int(bool(job.prospect.email)))
+    else:
+        raise ValueError("Type de tâche inconnu.")
+    record_outcome(job, outcome)
+    checkpoint(job, stage=final_stage)
+    completed = SearchJob.objects.filter(pk=job.pk, status="running").update(status="done", updated_at=timezone.now())
+    if completed and job.campaign:
+        Campaign.objects.filter(pk=job.campaign_id).update(status="done", error_message="")
+        _set_next_search(job.campaign_id)
+
+
+
 def recover_jobs():
-    SearchJob.objects.filter(status="running").update(status="queued", stage="Reprise apres redemarrage", next_run_at=timezone.now())
+    # Preserve provider deadlines and retry budgets across worker restarts.
+    for job in SearchJob.objects.filter(status="running", attempts__gte=3):
+        job.payload["outcome"] = "permanent_error"
+        job.payload["events"] = (job.payload.get("events", []) + [{
+            "at": timezone.now().isoformat(), "outcome": "permanent_error",
+            "reason": "Budget de tentatives épuisé avant le redémarrage.",
+        }])[-30:]
+        SearchJob.objects.filter(pk=job.pk, status="running").update(
+            status="error", stage=OUTCOME_LABELS["permanent_error"], payload=job.payload,
+            error="Budget de tentatives épuisé avant le redémarrage.", updated_at=timezone.now())
+    SearchJob.objects.filter(status="running").update(
+        status="queued", stage="Reprise apres redemarrage", updated_at=timezone.now())
     for campaign in Campaign.objects.filter(status="running"):
-        if not campaign.jobs.filter(status__in=["queued", "paused"]).exists():
+        latest = campaign.jobs.order_by("-created_at", "-pk").first()
+        if latest:
+            Campaign.objects.filter(pk=campaign.pk).update(status=latest.status, error_message=latest.error)
+        else:
             job = enqueue_search(campaign)
             job.status = "paused"
             job.stage = "Ancienne recherche interrompue : reprise manuelle"

@@ -38,6 +38,7 @@ backend/.worker.lock
 backend/.activity.lock
 backend/private-settings.tmp
 backend/.qa/
+backend/.desktop/
 
 # OS
 .DS_Store

@@ -1,9 +1,8 @@
 import logging
-import threading
 import hmac
 
 from django.conf import settings
-from django.db import close_old_connections, connection
+from django.db import connection
 from django.utils import timezone
 from django.db.models import Count, Q
 from django.contrib.auth.models import User
@@ -19,7 +18,7 @@ from .serializers import (
     ProspectSerializer,
     EmailTemplateSerializer,
 )
-from .services import run_prospection, send_prospect_email
+from .services import send_prospect_email
 from .demo import (
     demo_campaign,
     demo_campaign_from_payload,
@@ -36,33 +35,12 @@ logger = logging.getLogger(__name__)
 
 
 def start_campaign_worker(campaign_id):
-    thread = threading.Thread(
-        target=_run_campaign_worker,
-        args=(campaign_id,),
-        daemon=True,
-        name=f"campaign-{campaign_id}-prospection",
-    )
-    thread.start()
+    from .jobs import enqueue_search
+    return enqueue_search(Campaign.objects.get(pk=campaign_id))
 
 
 def _run_campaign_worker(campaign_id):
-    close_old_connections()
-    try:
-        campaign = Campaign.objects.get(pk=campaign_id)
-        try:
-            run_prospection(campaign)
-            campaign.status = "done"
-            campaign.error_message = ""
-            campaign.save(update_fields=["status", "error_message"])
-        except Exception as exc:
-            logger.exception("Campaign %s prospection failed", campaign_id)
-            campaign.status = "error"
-            campaign.error_message = str(exc)
-            campaign.save(update_fields=["status", "error_message"])
-    except Exception:
-        logger.exception("Campaign %s worker failed before completion", campaign_id)
-    finally:
-        close_old_connections()
+    return start_campaign_worker(campaign_id)
 
 
 def is_owner_request(request):
@@ -254,26 +232,14 @@ class CampaignViewSet(viewsets.ModelViewSet):
                 }
             )
 
-        campaign = self.get_object()
-
-        if campaign.status == "running":
-            return Response(
-                {"error": "Campagne déjà en cours."}, status=status.HTTP_400_BAD_REQUEST
-            )
-
-        campaign.status = "running"
-        campaign.launched_at = timezone.now()
-        campaign.error_message = ""
-        campaign.save(update_fields=["status", "launched_at", "error_message"])
-
-        start_campaign_worker(campaign.id)
-        return Response(
-            {
-                "message": "Prospection lancee.",
-                "status": "running",
-                "campaign_id": campaign.id,
-            }
-        )
+        from .jobs import enqueue_search
+        from .personal_api import JobSerializer
+        job = enqueue_search(self.get_object())
+        return Response({
+            "message": "Recherche enregistrée dans la file persistante.",
+            "status": job.status, "campaign_id": job.campaign_id,
+            "job": JobSerializer(job).data,
+        }, status=status.HTTP_202_ACCEPTED)
 
 
 # ── Prospects ─────────────────────────────────────────────────

@@ -4,14 +4,14 @@ import sqlite3
 import tempfile
 from datetime import timedelta
 from pathlib import Path
-from contextlib import closing
+from contextlib import closing, nullcontext
 from unittest.mock import Mock, patch
 
 import requests
 from django.apps import apps
 from django.conf import settings
 from django.core import mail
-from django.db import connection
+from django.db import OperationalError, connection
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -22,15 +22,24 @@ from .enrichment import enrich_prospect
 from .identity import capture_prospect, identity_key
 from . import jobs as prospection_jobs
 from .jobs import JobPaused, checkpoint, enqueue_search, recover_jobs, run_next_job
+from .management.commands import run_jobs
 from .mail import MailError, send_message, sync_delivery
 from .models import Campaign, EmailDraft, EmailLog, Prospect, QualificationReview, SearchJob
-from .qualification import qualify_prospect
+from .qualification import opportunity, qualify_prospect, record_creation_search
 from .private_config import protect, save_private_settings, load_settings
 from .services import ProspectionTemporaryError, _find_email_on_website, _get_city_coords, _get_public_page
 
 
 def element(number=1, **tags):
     return {"id": number, "type": "node", "tags": {"name": "Atelier Test", "addr:city": "Rennes", "addr:street": "Rue Test", **tags}}
+
+
+def documented_creation(prospect):
+    return record_creation_search(
+        prospect, search_url="https://search.example/results", contact_url="https://mairie.example/atelier",
+        method="Recherche du nom et de la ville, puis recoupement avec l'annuaire municipal.",
+        limits="Résultats consultés uniquement. Aucun test de délivrabilité.",
+    )
 
 
 class DiscoveryTests(TestCase):
@@ -114,17 +123,17 @@ class DiscoveryTests(TestCase):
             with self.assertRaises(ValueError):
                 _get_public_page("http://localhost/")
         redirect = Mock(status_code=302, headers={"Location": "http://127.0.0.1:8765/api/personal/contacts/"})
-        with patch("prospection.services.socket.getaddrinfo", side_effect=[public, local]), patch("prospection.services.requests.get", return_value=redirect) as get:
+        with patch("prospection.services.socket.getaddrinfo", side_effect=[public, local]), patch("prospection.services.request", return_value=redirect) as get:
             with self.assertRaises(ValueError):
                 _get_public_page("https://site.example/")
             self.assertEqual(get.call_count, 1)
 
     def test_geocoding_failure_is_retryable_and_success_cached(self):
-        with patch("prospection.services.time.sleep"), patch("prospection.services.requests.get", side_effect=requests.Timeout):
+        with patch("prospection.services.time.sleep"), patch("prospection.services.request", side_effect=requests.Timeout):
             with self.assertRaises(ProspectionTemporaryError):
                 _get_city_coords("VilleTest")
         response = Mock(); response.json.return_value = [{"lat": "48", "lon": "-1"}]
-        with patch("prospection.services.time.sleep"), patch("prospection.services.requests.get", return_value=response) as get:
+        with patch("prospection.services.time.sleep"), patch("prospection.services.request", return_value=response) as get:
             self.assertEqual(_get_city_coords("VilleTest"), ("48", "-1"))
             self.assertEqual(_get_city_coords("VilleTest"), ("48", "-1"))
             self.assertEqual(get.call_count, 1)
@@ -137,21 +146,53 @@ class DiscoveryTests(TestCase):
 
     @patch("prospection.qualification._get_public_page")
     def test_site_checks_store_observed_signals_and_timestamp(self, get_page):
-        get_page.return_value = Mock(status_code=200, url="https://atelier.example/", text="<title>Atelier</title><a href='/contact'>Contact</a>")
-        item = Prospect.objects.create(nom="Atelier", ville="Rennes", website="https://atelier.example")
+        get_page.return_value = Mock(status_code=200, url="https://atelier.example/",
+                                     text="<html><title>Atelier</title><a href='mailto:info@atelier.example'>Contact</a></html>")
+        item = Prospect.objects.create(nom="Atelier", ville="Rennes", website="https://atelier.example",
+                                       email="info@atelier.example")
         review = qualify_prospect(item)
         self.assertEqual(review.status, "pending")
-        self.assertEqual(review.priority, "low")
+        self.assertEqual(opportunity(review), "refonte")
         self.assertTrue(any(row["kind"] == "http_response" and row["url"] == "https://atelier.example/" for row in review.evidence))
         self.assertTrue(all(row["observed_at"] for row in review.evidence))
         self.assertTrue(any("viewport" in reason.lower() for reason in review.reasons))
+        self.assertIn("https://atelier.example/", item.email_draft.body)
 
     def test_missing_site_evidence_does_not_claim_no_site_exists(self):
         item = Prospect.objects.create(nom="Atelier", ville="Rennes")
         review = qualify_prospect(item)
-        self.assertEqual(review.status, "pending")
+        self.assertEqual(review.status, "unverified")
         self.assertEqual(review.evidence[0]["kind"], "website_not_listed")
-        self.assertIn("ne prouve pas", review.evidence[0]["detail"])
+        self.assertIn("ne prouve pas", review.evidence[0]["limits"])
+        self.assertFalse(EmailDraft.objects.filter(prospect=item).exists())
+
+    def test_documented_creation_keeps_edited_draft_and_previous_evidence(self):
+        item = Prospect.objects.create(nom="Atelier {nom}", ville="Rennes", email="info@atelier.example")
+        qualify_prospect(item)
+        review = documented_creation(item)
+        self.assertEqual(opportunity(review), "creation")
+        self.assertTrue(review.evidence[0]["historical"])
+        draft = EmailDraft.objects.get(prospect=item)
+        self.assertEqual(draft.subject, "À propos du site web de Atelier {nom}")
+        self.assertIn("NateOS", draft.body)
+        draft.body = "Texte personnalisé à conserver."
+        draft.save(update_fields=["body"])
+        documented_creation(item)
+        draft.refresh_from_db()
+        self.assertEqual(draft.body, "Texte personnalisé à conserver.")
+
+    @patch("prospection.qualification._get_public_page")
+    def test_accessible_page_without_anomaly_or_corroborated_contact(self, get_page):
+        get_page.return_value = Mock(status_code=200, url="https://atelier.example/",
+                                     text="<html><title>Atelier</title><meta name='viewport' content='width=device-width'>"
+                                          "<a href='mailto:info@atelier.example'>Contact</a></html>")
+        item = Prospect.objects.create(nom="Atelier", ville="Rennes", website="https://atelier.example",
+                                       email="different@atelier.example")
+        self.assertEqual(qualify_prospect(item).status, "unverified")
+        item.email = "info@atelier.example"
+        item.save(update_fields=["email"])
+        self.assertEqual(qualify_prospect(item).status, "no_opportunity")
+        self.assertFalse(EmailDraft.objects.filter(prospect=item).exists())
 
     def test_contacted_or_previously_sent_prospect_is_excluded(self):
         item = Prospect.objects.create(nom="Atelier", ville="Rennes", email="contact@test.example", status="contacted")
@@ -197,7 +238,7 @@ class JobTests(TestCase):
         self.assertTrue(run_next_job())
         job = SearchJob.objects.get(campaign=self.campaign)
         self.assertEqual(job.status, "done")
-        self.assertEqual(job.attempts, 1)
+        self.assertEqual(job.attempts, 0)  # Successful work consumes no failure retry.
         self.campaign.refresh_from_db()
         self.assertGreater(self.campaign.next_search_at, timezone.now() + timedelta(days=6))
         overpass.assert_called_once()
@@ -219,7 +260,7 @@ class JobTests(TestCase):
     @patch("prospection.enrichment.enrich_prospect")
     @patch("prospection.services._query_overpass", return_value=[element(website="https://atelier.example")])
     @patch("prospection.services._get_city_coords", return_value=("48", "-1"))
-    def test_job_discovers_then_enriches(self, coords, overpass, enrich):
+    def test_job_captures_then_queues_discovery(self, coords, overpass, enrich):
         job = enqueue_search(self.campaign)
         self.assertTrue(run_next_job())
         job.refresh_from_db()
@@ -227,12 +268,14 @@ class JobTests(TestCase):
         self.assertEqual(job.processed, 1)
         self.assertEqual(job.payload["capture_index"], 1)
         self.assertTrue(Prospect.objects.get().has_website)
-        enrich.assert_called_once()
+        enrich.assert_not_called()
+        self.assertTrue(SearchJob.objects.get(kind="qualification").payload["discover"])
 
+    @patch("prospection.discovery._search", return_value=[])
     @patch("prospection.enrichment.enrich_prospect")
     @patch("prospection.services._query_overpass", return_value=[element()])
     @patch("prospection.services._get_city_coords", return_value=("48", "-1"))
-    def test_search_queues_qualification_without_sending_email(self, coords, overpass, enrich):
+    def test_search_queues_qualification_without_sending_email(self, coords, overpass, enrich, search):
         job = enqueue_search(self.campaign)
         run_next_job()
         qualification_job = SearchJob.objects.get(kind="qualification")
@@ -240,9 +283,39 @@ class JobTests(TestCase):
         self.assertTrue(run_next_job())
         qualification_job.refresh_from_db()
         self.assertEqual(qualification_job.status, "done")
+        self.assertEqual(qualification_job.stage, "À enrichir")
         review = QualificationReview.objects.get(prospect=qualification_job.prospect)
-        self.assertEqual(review.status, "pending")
+        self.assertEqual(review.status, "unverified")
         self.assertFalse(EmailLog.objects.exists())
+
+    @override_settings(DESKTOP_MODE=False)
+    def test_worker_continues_after_a_sqlite_lock(self):
+        item = capture_prospect(self.campaign, element())
+        job = SearchJob.objects.create(prospect=item, kind="qualification", total=1)
+        cause = sqlite3.OperationalError("database is locked")
+        cause.sqlite_errorcode = sqlite3.SQLITE_BUSY
+        failure = OperationalError("database is locked")
+        failure.__cause__ = cause
+
+        def tick_with_one_lock():
+            if tick.call_count == 1:
+                raise failure
+            return run_next_job()
+
+        with (
+            patch.object(run_jobs, "worker_activity", side_effect=lambda: nullcontext(True)),
+            patch.object(run_jobs, "close_old_connections"),
+            patch.object(run_jobs, "run_next_job", side_effect=tick_with_one_lock) as tick,
+            patch.object(run_jobs.time, "sleep", side_effect=[None, KeyboardInterrupt]),
+            patch("prospection.mail.sync_delivery"),
+            self.assertLogs(run_jobs.logger, level="WARNING"),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            run_jobs.Command().run_worker({"once": False})
+        self.assertEqual(tick.call_count, 2)
+        job.refresh_from_db()
+        self.assertEqual(job.status, "done")
+        self.assertEqual(job.processed, 1)
 
     @patch("prospection.enrichment.enrich_prospect")
     @patch("prospection.services._query_overpass")
@@ -361,7 +434,7 @@ class PersonalApiTests(TestCase):
         low_item = Prospect.objects.create(nom="Faible", ville="Rennes", email="faible@test.example")
         medium = QualificationReview.objects.create(prospect=medium_item, status="pending", priority="medium")
         low = QualificationReview.objects.create(prospect=low_item, status="pending", priority="low")
-        response = self.client.get("/api/personal/qualification/")
+        response = self.client.get("/api/personal/qualification/", {"status": "enrich"})
         self.assertEqual([item["id"] for item in response.data["results"]], [high.pk, medium.pk, low.pk])
 
     def test_qualification_queue_excludes_any_prior_email_attempt(self):
@@ -415,7 +488,7 @@ class PersonalApiTests(TestCase):
 
     @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend", DEFAULT_FROM_EMAIL="Test <test@sender.example>")
     def test_approved_saved_draft_sends_only_after_explicit_confirmation(self):
-        review = qualify_prospect(self.item)
+        review = documented_creation(self.item)
         approved = self.client.post(f"/api/personal/qualification/{review.pk}/approve/")
         self.assertEqual(approved.data["status"], "approved")
         subject, body = "Question", "Bonjour"
@@ -431,6 +504,54 @@ class PersonalApiTests(TestCase):
         self.assertEqual(mail.outbox[-1].to, [self.item.email])
         self.assertEqual(mail.outbox[-1].body, body)
         self.assertEqual(EmailDraft.objects.get(prospect=self.item).state, "sent")
+
+    def test_legacy_generic_proposal_cannot_be_approved_or_overwritten(self):
+        review = QualificationReview.objects.create(prospect=self.item, status="pending")
+        draft = EmailDraft.objects.create(prospect=self.item, subject="Ancien", body="Texte modifié")
+        result = self.client.get("/api/personal/qualification/", {"status": "enrich"})
+        self.assertEqual(result.data["results"][0]["bucket"], "enrich")
+        self.assertEqual(self.client.post(f"/api/personal/qualification/{review.pk}/approve/").status_code, 409)
+        draft.refresh_from_db()
+        self.assertEqual(draft.body, "Texte modifié")
+
+    def test_in_queue_proof_edit_and_decisions_leave_the_next_review_available(self):
+        first = qualify_prospect(self.item)
+        other = Prospect.objects.create(nom="Autre atelier", ville="Rennes", email="other@test.example")
+        second = documented_creation(other)
+        endpoint = f"/api/personal/qualification/{first.pk}/"
+        proof = {
+            "search_url": "https://search.example/results",
+            "contact_url": "https://mairie.example/atelier",
+            "method": "Nom et ville recoupés dans les résultats publics.",
+            "limits": "Première page de résultats uniquement.",
+            "confirmed": False,
+        }
+        self.assertEqual(self.client.post(endpoint + "evidence/", proof, format="json").status_code, 400)
+        self.assertFalse(EmailDraft.objects.filter(prospect=self.item).exists())
+        proof["confirmed"] = True
+        checked = self.client.post(endpoint + "evidence/", proof, format="json")
+        self.assertEqual(checked.status_code, 200)
+        self.assertEqual(checked.data["opportunity"], "creation")
+        first.refresh_from_db()
+        for review in (first, second):
+            review.evidence.append({"kind": "commercial_pilot"})
+            review.save(update_fields=["evidence"])
+        sample = self.client.get("/api/personal/qualification/", {"status": "pilot"})
+        self.assertEqual(sample.data["count"], 2)
+        saved = self.client.put(f"/api/personal/contacts/{self.item.pk}/draft/",
+                                {"subject": "Une idée", "body": "Texte relu."}, format="json")
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(self.client.post(endpoint + "defer/").status_code, 200)
+        self.assertEqual(self.client.get("/api/personal/qualification/", {"status": "deferred"}).data["count"], 1)
+        self.assertEqual(self.client.post(endpoint + "reopen/").status_code, 200)
+        self.assertEqual(self.client.post(endpoint + "approve/").status_code, 200)
+        remaining = self.client.get("/api/personal/qualification/", {"status": "ready"})
+        self.assertEqual([row["id"] for row in remaining.data["results"]], [second.pk])
+        sample = self.client.get("/api/personal/qualification/", {"status": "pilot"})
+        self.assertEqual({row["id"]: row["bucket"] for row in sample.data["results"]},
+                         {first.pk: "approved", second.pk: "ready"})
+        self.assertEqual(EmailDraft.objects.get(prospect=self.item).body, "Texte relu.")
+        self.assertFalse(EmailLog.objects.exists())
 
     @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend", DEFAULT_FROM_EMAIL="Test <test@sender.example>")
     def test_pending_review_cannot_send_even_if_request_claims_confirmation(self):

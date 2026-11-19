@@ -410,6 +410,10 @@ export default function Campaigns() {
                   <td className="px-4 py-3 text-slate-500">{c.rayon_km} km</td>
                   <td className="px-4 py-3">
                     <Badge value={c.status} />
+                    {c.job && <p className="text-xs text-slate-600 mt-1">{c.job.stage} · {c.job.outcome_label}</p>}
+                    {c.job?.status === "queued" && c.job.error && (
+                      <p className="text-xs text-slate-600 mt-1">{c.job.error} · Reprise au plus tôt {new Date(c.job.next_run_at).toLocaleString("fr-FR")}</p>
+                    )}
                     {c.status === "error" && (
                       <p className="text-xs text-red-500 mt-1 max-w-xs truncate">
                         {c.error_message}

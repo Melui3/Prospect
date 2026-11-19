@@ -73,6 +73,14 @@ class ProspectListSerializer(serializers.ModelSerializer):
 
 
 class CampaignSerializer(serializers.ModelSerializer):
+    job = serializers.SerializerMethodField()
+
+    def get_job(self, obj):
+        from .personal_api import JobSerializer
+        latest = obj.jobs.order_by("-created_at", "-pk").first()
+        return JobSerializer(latest).data if latest else None
+
+
     total_prospects = serializers.ReadOnlyField()
     prospects_with_email = serializers.ReadOnlyField()
 
@@ -89,6 +97,7 @@ class CampaignSerializer(serializers.ModelSerializer):
             "launched_at",
             "total_prospects",
             "prospects_with_email",
+            "job",
         ]
         read_only_fields = ["status", "error_message", "created_at", "launched_at"]
 
