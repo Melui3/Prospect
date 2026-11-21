@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { Check, Clock3, RefreshCw, Search, X } from "lucide-react";
-import { decideQualification, errorMessage, getQualifications, runQualifications, saveEmailDraft, saveQualificationEvidence } from "./api";
+import { decideQualification, errorMessage, getQualifications, runQualifications, saveEmailDraft, saveQualificationEvidence, generateEmailDraft } from "./api";
 import { Empty, IconButton, Loading, Notice, formatDate, externalUrl } from "./common";
 
 const tabs = [
   ["selection", "Sélection commerciale"], ["ready", "Toutes les propositions"], ["pilot", "Pilote commercial"],
-  ["enrich", "À enrichir"], ["deferred", "Reportés"],
+  ["enrich", "À enrichir"], ["deferred", "Reportés"], ["approved", "Approuvés / à relire"],
   ["no_opportunity", "Sans opportunité démontrée"], ["excluded", "Exclus"],
 ];
 const outcome = { creation: "Création de site", refonte: "Refonte / amélioration" };
@@ -30,16 +30,14 @@ export function Evidence({ items }) {
 }
 
 function ReviewCard({ review, onUpdate, onDecision, dirty, setDirty, disabled }) {
-  const legacyDraft = Boolean(review.suggestion && review.draft?.body.includes("j'ai observe le point suivant"));
-  const [draft, setDraft] = useState((legacyDraft ? review.suggestion : review.draft) || review.suggestion || { subject: "", body: "" });
-  const [needsSave, setNeedsSave] = useState(legacyDraft);
+  const [draft, setDraft] = useState(review.draft || { subject: "", body: "", revision: 0, versions: [] });
   const [proof, setProof] = useState(emptyProof);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const { prospect } = review;
-  const editable = Boolean(review.opportunity);
-  const actionable = ["ready", "enrich", "deferred"].includes(review.bucket);
+  const editable = Boolean(review.opportunity || review.draft && ["pending", "deferred", "approved"].includes(review.status));
+  const actionable = ["ready", "enrich", "deferred", "approved"].includes(review.bucket);
   const busy = working || disabled;
 
   const act = async (operation) => {
@@ -49,12 +47,14 @@ function ReviewCard({ review, onUpdate, onDecision, dirty, setDirty, disabled })
     finally { setWorking(false); }
   };
   const save = async () => {
-    await saveEmailDraft(prospect.id, { subject: draft.subject, body: draft.body });
-    setNeedsSave(false); setDirty(false); setNotice("Brouillon enregistré.");
+    const saved = await saveEmailDraft(prospect.id, { subject: draft.subject, body: draft.body, expected_revision: draft.revision || 0 });
+    setDraft(saved); setDirty(false);
+    setNotice(saved.approved_revision === saved.revision ? "Version approuvée inchangée." : "Version enregistrée. Une approbation de ce texte exact est nécessaire.");
+    return saved;
   };
   const decide = (decision) => act(async () => {
-    if (dirty || decision === "approve" && needsSave) await save();
-    await onDecision(review, decision);
+    const current = dirty ? await save() : draft;
+    await onDecision(review, decision, current.revision);
   });
   const change = (field, value) => { setDraft((previous) => ({ ...previous, [field]: value })); setDirty(true); };
   const record = (value) => act(async () => {
@@ -88,21 +88,29 @@ function ReviewCard({ review, onUpdate, onDecision, dirty, setDirty, disabled })
     <ul className="p-qualification-reasons">{review.reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul>
     <Evidence items={review.evidence} />
     <Notice>{error}</Notice><Notice kind="success">{notice}</Notice>
+    {review.selection && <button className="p-button" disabled={busy} onClick={() => act(async () => {
+      if (dirty && !window.confirm("Générer une version et quitter le texte non enregistré ?")) return;
+      await generateEmailDraft(prospect.id, draft.revision || 0);
+      setDirty(false); await onUpdate();
+    })}>{draft.revision ? "Générer une nouvelle version personnalisée" : "Préparer le brouillon personnalisé"}</button>}
     {editable && <section className="p-settings-fields">
-      <h3>Brouillon</h3>
+      <h3>Brouillon · version {draft.revision || "non enregistrée"}</h3>
+      <p>{draft.approved_revision === draft.revision && draft.revision ? "Cette version est approuvée." : "Cette version n’est pas approuvée. Toute modification exige une nouvelle validation."}</p>
       <label>Objet<input disabled={busy} value={draft.subject} maxLength={200} onChange={(e) => change("subject", e.target.value)} /></label>
       <label>Message<textarea disabled={busy} rows={12} value={draft.body} maxLength={50000} onChange={(e) => change("body", e.target.value)} /></label>
       <div className="p-actions">
-        {review.suggestion && <button className="p-button" disabled={busy} onClick={() => {
-          if (dirty && !window.confirm("Remplacer le texte non enregistré dans cet éditeur ?")) return;
-          setDraft(review.suggestion); setDirty(true);
-        }}>Charger le modèle proposé</button>}
-        <button className="p-button" disabled={busy || !(dirty || needsSave) || !draft.subject.trim() || !draft.body.trim()} onClick={() => act(save)}>Enregistrer le brouillon</button>
+        <button className="p-button" disabled={busy || !dirty || !draft.subject.trim() || !draft.body.trim()} onClick={() => act(save)}>Enregistrer le brouillon</button>
       </div>
-      {legacyDraft && needsSave && <details className="p-qualification-draft">
-        <summary>Ancien brouillon conservé jusqu’à l’enregistrement</summary><pre>{review.draft.body}</pre>
-      </details>}
     </section>}
+    {draft.versions?.length > 0 && <details className="p-qualification-draft"><summary>Historique des versions ({draft.versions.length})</summary>
+      {draft.versions.map((version) => <section key={version.number}>
+        <h3>Version {version.number} · {formatDate(version.created_at)}</h3>
+        <p>{({ conditional: "Rédaction conditionnelle", human: "Modification humaine", legacy: "Brouillon historique", manual: "Saisie manuelle" })[version.origin] || version.origin}
+          {version.approved_at && ` · approuvée le ${formatDate(version.approved_at)}`}</p>
+        <p>Destinataire : {version.recipient}</p><strong>{version.subject}</strong><pre>{version.body}</pre>
+        {version.evidence?.records?.length > 0 && <Evidence items={version.evidence.records} />}
+      </section>)}
+    </details>}
     {!editable && review.draft && <details className="p-qualification-draft">
       <summary>Brouillon conservé · non prêt à envoyer</summary><strong>{review.draft.subject}</strong><pre>{review.draft.body}</pre>
     </details>}
@@ -120,8 +128,8 @@ function ReviewCard({ review, onUpdate, onDecision, dirty, setDirty, disabled })
       </form>
     </details>}
     {actionable && <div className="p-actions p-form-footer">
-      {editable && <button className="p-button primary" disabled={busy || !draft.subject.trim() || !draft.body.trim()} onClick={() => decide("approve")}><Check size={15} /> Approuver</button>}
-      {review.bucket === "deferred"
+      {editable && <button className="p-button primary" disabled={busy || !draft.subject.trim() || !draft.body.trim()} onClick={() => decide("approve")}><Check size={15} /> Approuver cette version</button>}
+      {["deferred", "approved"].includes(review.bucket)
         ? <button className="p-button" disabled={busy} onClick={() => decide("reopen")}><RefreshCw size={15} /> Remettre à examiner</button>
         : <button className="p-button" disabled={busy} onClick={() => decide("defer")}><Clock3 size={15} /> Reporter</button>}
       <button className="p-button p-danger" disabled={busy} onClick={() => decide("reject")}><X size={15} /> Rejeter</button>
@@ -172,8 +180,8 @@ export default function Qualification() {
   const results = data?.results || [];
   const index = Math.max(0, results.findIndex((item) => item.id === selected));
   const review = results[index];
-  const decide = async (item, decision) => {
-    await decideQualification(item.id, decision);
+  const decide = async (item, decision, draftRevision) => {
+    await decideQualification(item.id, decision, draftRevision);
     const next = results[index + 1]?.id || results[index - 1]?.id || null;
     setSelected(next); setDirty(false); setMessage("Décision enregistrée.");
     await refresh();

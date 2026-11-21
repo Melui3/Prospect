@@ -258,3 +258,51 @@ l’examen d’une page dédiée ou d’un site vitrine. L’absence de viewport
 une vérification ciblée du responsive, avec sa limite affichée. Les preuves
 insuffisantes, périmées ou non traçables ne servent pas à compléter les places.
 Les autres onglets conservent l’accès aux analyses et aux décisions existantes.
+
+### Lot 4 — Rédaction conditionnelle et versions (20 novembre 2026)
+
+La rédaction part exclusivement de la sélection justifiée du Lot 3. Trois
+parcours conditionnels couvrent carte tierce, informations dispersées et
+absence de viewport, en conservant leurs réserves. Le texte reprend
+l'observation enregistrée, sa date et son URL, une prestation correspondante,
+le portfolio https://nathaniel-dev.fr/ et une proposition d'échange écrit
+avant chiffrage. Aucun modèle de langage ni service payant n'est appelé.
+Ces modèles ne prétendent ni analyser une activité au-delà des preuves,
+ni connaître un budget ou une intention d'achat.
+
+À la fin d'une qualification, le worker prépare les brouillons manquants des
+opportunités sélectionnées. Les brouillons existants restent intacts.
+Dans Qualification, la génération explicite crée une nouvelle version ;
+les anciens textes ne sont jamais substitués silencieusement dans l'éditeur.
+
+Les migrations 0010/0011 ajoutent les instantanés et archivent les textes
+existants sans les régénérer. Une approbation historique de fiche n'est pas
+automatiquement attribuée à une version : une validation explicite est requise.
+Le texte, le destinataire, l'identité, les preuves complètes et leur origine
+sont conservés par version. Toute modification du texte, du modèle, des
+preuves liées ou de l'identité/destinataire produit une nouvelle version et
+retire l'approbation active. Un enregistrement identique ne crée pas de version ;
+une régénération explicite en crée une même si le résultat est identique.
+
+L'API de sauvegarde/génération requiert expected_revision, l'approbation et
+l'envoi requièrent revision. Une fenêtre périmée reçoit un conflit explicite.
+L'envoi vérifie la version courante approuvée, son empreinte, le destinataire,
+la décision actuelle, les exclusions/doublons et la fraîcheur des preuves.
+Le journal d'envoi conserve le numéro et l'empreinte exacts. Les anciens
+points d'entrée sans approbation de version restent bloqués.
+Pendant une soumission, le texte et la fiche sont protégés contre les
+modifications via l'application. Un arrêt brutal peut laisser une soumission
+à rapprocher manuellement de son historique ; aucune relance automatique
+n'est autorisée par le Lot 4.
+
+L'ouverture du composeur Gmail est précédée du contrôle de version côté
+serveur. Prospect ne peut pas empêcher une modification ultérieure directement
+dans Gmail ; la confirmation manuelle locale vérifie à nouveau le texte
+enregistré mais ne certifie pas le contenu réellement envoyé hors application.
+La restauration d'un texte local du navigateur est explicite.
+
+Les lectures de Qualification ne génèrent ni ne modifient de brouillons.
+Les historiques sont accessibles dans Qualification, y compris l'onglet
+Approuvés / à relire ; une remise à examiner explicite retire l'approbation.
+Les choix de rejet, report et opposition sont préservés. Les envois et recherches
+réels ne sont pas exécutés pendant la recette. Le Lot 5 reste hors périmètre.

@@ -2,6 +2,7 @@ from datetime import timedelta
 from email.utils import parseaddr
 
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Q, Value, When
 from django.utils import timezone
 from rest_framework import serializers, viewsets, status
@@ -11,11 +12,12 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 
+from .drafts import DraftError, generate, approve, lock_prospect, selected_info, bound_info, assert_approved
 from .consultations import ConsultationError
 from .identity import identity_key
 from .jobs import REPEAT_INTERVAL_DAYS, enqueue_enrichment, enqueue_qualification, enqueue_search, job_outcome, OUTCOME_LABELS
 from .mail import MailError, send_message, sync_delivery
-from .models import Campaign, EmailDraft, EmailLog, EmailTemplate, Prospect, ProspectEvent, QualificationReview, SearchJob
+from .models import Campaign, EmailDraft, EmailLog, EmailTemplate, Prospect, ProspectEvent, QualificationReview, SearchJob, EmailDraftVersion
 from .private_config import brevo_key, save_private_settings, sender_address
 from .qualification import draft_suggestion, opportunity, prospect_is_eligible, qualify_prospect, record_creation_search, review_bucket
 from .views import is_owner_request
@@ -55,14 +57,25 @@ class JobSerializer(serializers.ModelSerializer):
 class LogSerializer(serializers.ModelSerializer):
     class Meta:
         model = EmailLog
-        fields = ["id", "subject", "body", "recipient", "sent_at", "success", "error_message", "source", "delivery_status", "delivery_updated_at"]
+        fields = ["id", "subject", "body", "recipient", "sent_at", "success", "error_message", "source", "delivery_status", "delivery_updated_at", "draft_revision", "draft_fingerprint"]
+
+
+class DraftVersionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EmailDraftVersion
+        fields = ["number", "subject", "body", "recipient", "context", "evidence", "origin",
+                  "generator", "created_at", "approved_at"]
 
 
 class EmailDraftSerializer(serializers.ModelSerializer):
+    versions = DraftVersionSerializer(many=True, read_only=True)
+
     class Meta:
         model = EmailDraft
-        fields = ["id", "subject", "body", "template", "state", "updated_at", "sent_at"]
-        read_only_fields = ["id", "state", "updated_at", "sent_at"]
+        fields = ["id", "subject", "body", "template", "state", "updated_at", "sent_at",
+                  "revision", "approved_revision", "approved_at", "origin", "evidence_snapshot", "versions"]
+        read_only_fields = ["id", "state", "updated_at", "sent_at", "revision", "approved_revision",
+                            "approved_at", "origin", "evidence_snapshot", "versions"]
 
 
 class EventSerializer(serializers.ModelSerializer):
@@ -115,7 +128,11 @@ class ContactSerializer(serializers.ModelSerializer):
             data["next_followup_at"] = None
         return data
 
+    @transaction.atomic
     def update(self, instance, data):
+        instance = lock_prospect(instance.pk)
+        if EmailDraft.objects.filter(prospect=instance, sending_revision__isnull=False).exists():
+            raise serializers.ValidationError("Un envoi est en cours. Attends son résultat avant de modifier la fiche.")
         old_status, old_notes, old_followup = instance.status, instance.notes, instance.next_followup_at
         result = super().update(instance, data)
         changes = []
@@ -125,6 +142,10 @@ class ContactSerializer(serializers.ModelSerializer):
             changes.append("Notes mises a jour")
         if result.next_followup_at != old_followup:
             changes.append("Date de relance mise a jour")
+        if any(k in data for k in ("nom", "ville", "email", "website")):
+            draft = EmailDraft.objects.filter(prospect=result).first()
+            if draft:
+                draft.save()
         if changes:
             ProspectEvent.objects.create(prospect=result, kind="update", message=". ".join(changes))
         return result
@@ -163,7 +184,7 @@ class QualificationSerializer(serializers.ModelSerializer):
         return opportunity(obj) if review_bucket(obj) in {"ready", "deferred"} else None
 
     def get_suggestion(self, obj):
-        return draft_suggestion(obj) if self.get_opportunity(obj) else None
+        return None
 
     def get_prospect(self, obj):
         item = obj.prospect
@@ -174,7 +195,7 @@ class QualificationSerializer(serializers.ModelSerializer):
             draft = obj.prospect.email_draft
         except EmailDraft.DoesNotExist:
             return None
-        return {"subject": draft.subject, "body": draft.body, "state": draft.state}
+        return EmailDraftSerializer(draft).data
 
 
 class ContactPagination(PageNumberPagination):
@@ -237,27 +258,75 @@ class ContactViewSet(viewsets.ModelViewSet):
         job = enqueue_enrichment(self.get_object())
         return Response(JobSerializer(job).data, status=202)
 
+    @action(detail=True, methods=["post"], url_path="generate-draft")
+    def generate_draft(self, request, pk=None):
+        prospect = self.get_object()
+        expected = request.data.get("expected_revision")
+        if type(expected) is not int:
+            return Response({"error": "Actualise le brouillon avant de générer une version."}, status=409)
+        try:
+            draft = generate(prospect.pk, expected)
+            return Response(EmailDraftSerializer(draft).data)
+        except DraftError as exc:
+            return Response({"error": str(exc)}, status=409)
+
     @action(detail=True, methods=["get", "put"], url_path="draft")
     def draft(self, request, pk=None):
         prospect = self.get_object()
-        review = QualificationReview.objects.filter(prospect=prospect).first()
-        if not review:
-            return Response({"error": "Cette fiche doit d'abord etre analysee."}, status=409)
-        draft = EmailDraft.objects.filter(prospect=prospect).first()
-        if request.method == "PUT":
-            can_edit = review.status == "approved" or review_bucket(review) in {"ready", "deferred"} and opportunity(review)
-            if not prospect.email or not can_edit:
-                return Response({"error": "Le brouillon requiert un contact et une qualification exploitables."}, status=409)
-            serializer = EmailDraftSerializer(draft, data=request.data, partial=True)
-            serializer.is_valid(raise_exception=True)
-            if "subject" in serializer.validated_data:
-                subject = serializer.validated_data["subject"]
-                if "\n" in subject or "\r" in subject:
-                    return Response({"error": "Le sujet doit tenir sur une seule ligne."}, status=400)
-            draft = serializer.save(prospect=prospect, state="draft", sent_at=None)
-        if draft is None:
-            return Response({"subject": "", "body": "", "template": None, "state": "draft"})
-        return Response(EmailDraftSerializer(draft).data)
+        if request.method == "GET":
+            draft = EmailDraft.objects.filter(prospect=prospect).first()
+            return Response(EmailDraftSerializer(draft).data if draft else
+                            {"subject": "", "body": "", "template": None, "state": "draft",
+                             "revision": 0, "approved_revision": None, "versions": []})
+        try:
+            with transaction.atomic():
+                prospect = lock_prospect(prospect.pk)
+                review = QualificationReview.objects.filter(prospect=prospect).first()
+                if not review or review.status not in {"pending", "deferred", "approved"} or not prospect_is_eligible(prospect):
+                    raise DraftError("Cette décision ou exclusion ne permet pas de modifier le brouillon.")
+                draft = EmailDraft.objects.select_for_update().filter(prospect=prospect).first()
+                expected = request.data.get("expected_revision")
+                if type(expected) is not int or expected != (draft.revision if draft else 0):
+                    raise DraftError("Le brouillon a changé. Actualise avant d’enregistrer.")
+                form = EmailDraftSerializer(draft, data=request.data, partial=True)
+                form.is_valid(raise_exception=True)
+                values = form.validated_data
+                subject = values.get("subject", draft.subject if draft else "")
+                body = values.get("body", draft.body if draft else "")
+                if not subject.strip() or not body.strip() or "\n" in subject or "\r" in subject or len(body)>50000:
+                    return Response({"error": "Renseigne un objet sur une ligne et un message valide."}, status=400)
+                draft = draft or EmailDraft(prospect=prospect)
+                changed = any(getattr(draft, k) != v for k,v in values.items())
+                for k,v in values.items():
+                    setattr(draft,k,v)
+                if changed:
+                    draft.origin = "human"
+                if not draft.evidence_snapshot:
+                    try:
+                        current, info = selected_info(prospect.pk, explicit_approval=True)
+                        draft.evidence_snapshot = bound_info(current, info)
+                    except DraftError:
+                        pass
+                draft.expected_revision = expected
+                draft.state = "draft"; draft.sent_at = None
+                draft.save()
+                return Response(EmailDraftSerializer(draft).data)
+        except DraftError as exc:
+            return Response({"error": str(exc)}, status=409)
+
+    @action(detail=True, methods=["post"], url_path="validate-draft")
+    @transaction.atomic
+    def validate_draft(self, request, pk=None):
+        prospect = lock_prospect(self.get_object().pk)
+        draft = EmailDraft.objects.filter(prospect=prospect, state="draft").first()
+        try:
+            if not draft or not prospect_is_eligible(prospect):
+                raise DraftError("Cette fiche ou ce brouillon ne permet pas de préparer un envoi.")
+            assert_approved(draft, prospect, request.data.get("subject"), request.data.get("body"),
+                            request.data.get("revision"))
+            return Response({"valid": True, "revision": draft.revision})
+        except DraftError as exc:
+            return Response({"error": str(exc)}, status=409)
 
     @action(detail=True, methods=["post"], url_path="send-email")
     def send_email(self, request, pk=None):
@@ -290,10 +359,7 @@ class ContactViewSet(viewsets.ModelViewSet):
         try:
             log = send_message(prospect, subject, body, request.headers.get("Idempotency-Key", ""), template,
                                force=request.data.get("force") is True, manual=request.data.get("manual") is True,
-                               approval_confirmed=True)
-            draft.state = "sent"
-            draft.sent_at = timezone.now()
-            draft.save(update_fields=["state", "sent_at", "updated_at"])
+                               approval_confirmed=True, revision=request.data.get("revision"))
             return Response(LogSerializer(log).data)
         except MailError as exc:
             return Response({"error": str(exc)}, status=exc.status)
@@ -393,7 +459,7 @@ def qualification_queue(request):
     status_filter = request.query_params.get("status", "ready")
     if status_filter == "pending":
         status_filter = "ready"
-    if status_filter not in {"selection", "ready", "enrich", "deferred", "excluded", "no_opportunity", "pilot"}:
+    if status_filter not in {"selection", "ready", "enrich", "deferred", "excluded", "no_opportunity", "pilot", "approved"}:
         return Response({"error": "Filtre de qualification invalide."}, status=400)
     qs = QualificationReview.objects.select_related("prospect__email_draft", "prospect__campaign").annotate(
         priority_rank=Case(When(priority="high", then=Value(2)), When(priority="medium", then=Value(1)), default=Value(0), output_field=IntegerField()),
@@ -476,21 +542,28 @@ def qualification_run(request):
 
 @api_view(["POST"])
 @permission_classes([OwnerOnly])
+@transaction.atomic
 def qualification_decision(request, pk, decision):
     review = get_object_or_404(QualificationReview.objects.select_related("prospect"), pk=pk)
     allowed = {"approve": "approved", "reject": "rejected", "defer": "deferred", "reopen": "pending"}
     if decision not in allowed:
         return Response({"error": "Decision invalide."}, status=400)
+    lock_prospect(review.prospect_id)
+    review.refresh_from_db()
     if decision == "approve":
-        if review.status not in {"pending", "deferred"} or not prospect_is_eligible(review.prospect) or not opportunity(review):
-            return Response({"error": "Une preuve commerciale et un contact corroboré sont nécessaires."}, status=409)
-        draft = EmailDraft.objects.filter(prospect=review.prospect, state="draft").first()
-        if not draft or not draft.subject.strip() or not draft.body.strip() or "j'ai observe le point suivant" in draft.body:
-            return Response({"error": "Relis et enregistre un brouillon adapté avant d’approuver."}, status=409)
-    if decision in {"reject", "defer"} and review_bucket(review) not in {"ready", "enrich", "deferred"}:
+        try:
+            approve(review.prospect_id, request.data.get("revision"))
+        except DraftError as exc:
+            return Response({"error": str(exc)}, status=409)
+    if decision in {"reject", "defer"} and review_bucket(review) not in {"ready", "enrich", "deferred", "approved"}:
         return Response({"error": "Cette proposition n’est plus à examiner."}, status=409)
-    if decision == "reopen" and review.status != "deferred":
-        return Response({"error": "Seule une proposition reportee peut etre reouverte."}, status=409)
+    if decision == "reopen" and review.status not in {"deferred", "approved"}:
+        return Response({"error": "Seule une proposition reportée ou approuvée peut être remise à examiner."}, status=409)
+    draft = EmailDraft.objects.filter(prospect_id=review.prospect_id).first()
+    if draft and draft.sending_revision is not None:
+        return Response({"error": "Un envoi est en cours. Attends son résultat."}, status=409)
+    if decision != "approve":
+        EmailDraft.objects.filter(prospect_id=review.prospect_id).update(approved_revision=None, approved_at=None)
     review.status = allowed[decision]
     review.save(update_fields=["status"])
     ProspectEvent.objects.create(prospect=review.prospect, kind="qualification", message=f"Qualification : {review.get_status_display()}.")

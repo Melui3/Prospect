@@ -243,6 +243,8 @@ def _process_job(job):
             outcome = "excluded"
         elif opportunity(review):
             outcome = "verified"
+        from .drafts import prepare_selected_missing
+        job.payload["draft_preparation"] = prepare_selected_missing()
         checkpoint(job, processed=1)
     elif job.kind == "enrichment":
         enrich_prospect(job.prospect, force=job.payload.get("force", False))

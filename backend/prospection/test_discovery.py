@@ -100,6 +100,11 @@ class DiscoveryTests(TestCase):
         self.assertTrue(any(e["kind"]=="third_party_menu" for e in q.evidence))
         self.assertEqual(job.payload["outcome"],"verified")
         self.assertEqual(q.status,"pending")  # Human approval is still necessary.
+        draft=EmailDraft.objects.get(prospect=q.prospect)
+        self.assertEqual(draft.origin,"conditional")
+        self.assertIn("https://nathaniel-dev.fr/",draft.body)
+        self.assertEqual(job.payload["draft_preparation"]["created"],1)
+        self.assertIsNone(draft.approved_revision)
 
     def test_directory_contact_without_business_observation_is_insufficient(self):
         url="https://annuaire-restos.fr/fiche/cafe-pins/"

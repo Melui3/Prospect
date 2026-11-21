@@ -9,35 +9,6 @@ from .consultations import ConsultationError
 from .services import _get_public_page, _normalize_website_url, _normalized_words, _social_platform
 
 
-CREATION_SUBJECT = "À propos du site web de {nom}"
-CREATION_BODY = """Bonjour,
-
-En recherchant {nom} à {ville}, je n'ai pas trouvé de site officiel associé à votre établissement.
-
-Si vous n'en disposez pas encore, un site web pourrait compléter votre présence sur Google et les réseaux sociaux, en permettant à vos clients de découvrir votre activité, vos services et vos coordonnées au même endroit.
-
-Je suis Nathaniel, développeur web indépendant chez NateOS. Je conçois des sites professionnels pour les commerces et petites entreprises, adaptés aux téléphones et pensés pour le référencement local.
-
-Si ce projet peut vous intéresser, je peux vous proposer un devis gratuit et sans engagement.
-
-Cordialement,
-
-Nathaniel
-NateOS"""
-
-REFONT_SUBJECT = "Une piste pour la version mobile du site de {nom}"
-REFONT_BODY = """Bonjour,
-
-En consultant {website}, j’ai constaté que la page ne déclare pas comment elle doit s’adapter à la largeur de l’écran. Je peux vous proposer de vérifier son affichage sur téléphone et d’ajuster la mise en page si nécessaire.
-
-Je suis Nathaniel, développeur web indépendant chez NateOS. Si cette amélioration vous intéresse, je peux vous proposer un devis gratuit et sans engagement.
-
-Cordialement,
-
-Nathaniel
-NateOS"""
-
-
 def _evidence(kind, source, detail, method, limits, url="", **values):
     return {
         "kind": kind, "source": source, "detail": detail, "url": url,
@@ -117,24 +88,14 @@ def review_bucket(review):
 
 
 def draft_suggestion(review):
-    kind = opportunity(review)
-    if not kind:
+    # Preview is conditional on the strict Lot 3 selection; it never writes a draft.
+    from .drafts import DraftError, selected_info, compose
+    try:
+        current, info = selected_info(review.prospect_id)
+        subject, body = compose(current, info)
+        return {"subject": subject, "body": body}
+    except DraftError:
         return None
-    prospect = review.prospect
-    site = next((row["url"] for row in reversed(_active_evidence(review)) if row["kind"] == "missing_viewport"), "")
-    context = {
-        "nom": _clean(prospect.nom), "ville": _clean(prospect.ville),
-        "secteur": _clean(prospect.campaign.secteur) if prospect.campaign_id else "",
-        "website": _clean(site),
-    }
-    subject, body = (CREATION_SUBJECT, CREATION_BODY) if kind == "creation" else (REFONT_SUBJECT, REFONT_BODY)
-    body = body.format_map(context)
-    if kind == "creation":
-        specific = next((row.get("offer", "") for row in reversed(_active_evidence(review))
-                         if row["kind"] == "commercial_pilot"), "")
-        if specific:
-            body = body.replace("\n\nJe suis Nathaniel", f"\n\n{specific}\n\nJe suis Nathaniel", 1)
-    return {"subject": subject.format_map(context)[:200], "body": body}
 
 
 @transaction.atomic
@@ -155,9 +116,6 @@ def _save_review(prospect, status, reasons, evidence, priority="low", preserve_d
         defaults={"status": status, "priority": priority, "reasons": reasons,
                   "evidence": history + evidence, "checked_at": timezone.now()},
     )
-    suggestion = draft_suggestion(review)
-    if suggestion:
-        EmailDraft.objects.get_or_create(prospect=prospect, defaults=suggestion)
     return review
 
 

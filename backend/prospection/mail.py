@@ -27,7 +27,7 @@ def mark_contacted(prospect):
     prospect.save(update_fields=["last_contacted_at", "status", "next_followup_at"])
 
 
-def send_message(prospect, subject, body, request_key, template=None, force=False, manual=False, approval_confirmed=False):
+def send_message(prospect, subject, body, request_key, template=None, force=False, manual=False, approval_confirmed=False, revision=None):
     from .opposition import is_opposed
     if prospect.status == "do_not_contact" or is_opposed(prospect.nom, prospect.ville, prospect.email, prospect.website):
         raise MailError("Cette fiche est marquee Ne plus contacter.")
@@ -37,10 +37,14 @@ def send_message(prospect, subject, body, request_key, template=None, force=Fals
         raise MailError("Renseigne un sujet valide et un message.")
     if len(body) > 50000 or not isinstance(request_key, str) or not request_key or len(request_key) > 80:
         raise MailError("Message ou identifiant d'envoi invalide.")
+    from .drafts import DraftError, assert_approved, lock_prospect
     with transaction.atomic():
+        prospect = lock_prospect(prospect.pk)
+        if prospect.status == "do_not_contact" or prospect.merged_into_id or is_opposed(prospect.nom, prospect.ville, prospect.email, prospect.website):
+            raise MailError("Ce contact est exclu.")
         existing = EmailLog.objects.filter(request_key=request_key).first()
         if existing:
-            if existing.prospect_id != prospect.pk or existing.subject != subject or existing.body != body or existing.recipient != prospect.email or (existing.source == "manual") != manual:
+            if existing.prospect_id != prospect.pk or existing.subject != subject or existing.body != body or existing.recipient != prospect.email or existing.draft_revision != revision or (existing.source == "manual") != manual:
                 raise MailError("Cet identifiant appartient deja a un autre message.", 409)
             if not existing.success:
                 raise MailError("Cet envoi a deja ete tente. Verifie son historique avant de recommencer.", 409)
@@ -52,6 +56,12 @@ def send_message(prospect, subject, body, request_key, template=None, force=Fals
         draft = EmailDraft.objects.filter(prospect=prospect, state="draft", subject=subject, body=body).first()
         if not draft:
             raise MailError("Le texte exact doit etre enregistre comme brouillon avant l'envoi.", 409)
+        try:
+            assert_approved(draft, prospect, subject, body, revision)
+        except DraftError as exc:
+            raise MailError(str(exc), 409) from exc
+        if draft.sending_revision is not None:
+            raise MailError("Un envoi est déjà en cours pour ce brouillon.", 409)
         same_message = EmailLog.objects.filter(prospect=prospect, recipient=prospect.email, subject=subject, body=body, sent_at__gte=timezone.now() - timedelta(days=1))
         if same_message.filter(delivery_status__in=["uncertain", "submitting"]).exists():
             raise MailError("Un envoi de ce message est en cours ou incertain. Verifie Brevo avant de retenter.", 409)
@@ -61,7 +71,10 @@ def send_message(prospect, subject, body, request_key, template=None, force=Fals
             prospect=prospect, template=template, recipient=prospect.email,
             subject=subject, body=body, request_key=request_key,
             success=False, delivery_status="submitting", source="manual" if manual else "smtp",
+            draft_revision=revision,
+            draft_fingerprint=draft.versions.get(number=revision).fingerprint,
         )
+        EmailDraft.objects.filter(pk=draft.pk).update(sending_revision=revision)
     try:
         key = "" if manual else brevo_key()
         if manual:
@@ -100,6 +113,8 @@ def send_message(prospect, subject, body, request_key, template=None, force=Fals
         log.error_message = str(exc)[:1000]
         log.save()
         raise MailError("Envoi non confirme. Consulte l'historique avant de renvoyer." if log.delivery_status == "uncertain" else str(exc), 502) from exc
+    finally:
+        EmailDraft.objects.filter(pk=draft.pk, sending_revision=revision).update(sending_revision=None)
 
 
 def sync_delivery():

@@ -35,11 +35,17 @@ def element(number=1, **tags):
 
 
 def documented_creation(prospect):
-    return record_creation_search(
+    review = record_creation_search(
         prospect, search_url="https://search.example/results", contact_url="https://mairie.example/atelier",
         method="Recherche du nom et de la ville, puis recoupement avec l'annuaire municipal.",
         limits="Résultats consultés uniquement. Aucun test de délivrabilité.",
     )
+    review.evidence.append({"kind":"third_party_menu", "source":"Annuaire fictif",
+        "url":"https://mairie.example/menu", "detail":"Carte publiée chez un tiers.",
+        "observed_at":timezone.now().isoformat(), "origin":"human",
+        "method":"Lecture d’une page fictive.", "limits":"Besoin non confirmé."})
+    review.save(update_fields=["evidence"])
+    return review
 
 
 class DiscoveryTests(TestCase):
@@ -156,7 +162,7 @@ class DiscoveryTests(TestCase):
         self.assertTrue(any(row["kind"] == "http_response" and row["url"] == "https://atelier.example/" for row in review.evidence))
         self.assertTrue(all(row["observed_at"] for row in review.evidence))
         self.assertTrue(any("viewport" in reason.lower() for reason in review.reasons))
-        self.assertIn("https://atelier.example/", item.email_draft.body)
+        self.assertFalse(EmailDraft.objects.filter(prospect=item).exists())
 
     def test_missing_site_evidence_does_not_claim_no_site_exists(self):
         item = Prospect.objects.create(nom="Atelier", ville="Rennes")
@@ -172,9 +178,9 @@ class DiscoveryTests(TestCase):
         review = documented_creation(item)
         self.assertEqual(opportunity(review), "creation")
         self.assertTrue(review.evidence[0]["historical"])
-        draft = EmailDraft.objects.get(prospect=item)
-        self.assertEqual(draft.subject, "À propos du site web de Atelier {nom}")
-        self.assertIn("NateOS", draft.body)
+        # Qualification no longer creates a generic email before strict selection.
+        self.assertFalse(EmailDraft.objects.filter(prospect=item).exists())
+        draft = EmailDraft.objects.create(prospect=item, subject="Texte humain", body="NateOS")
         draft.body = "Texte personnalisé à conserver."
         draft.save(update_fields=["body"])
         documented_creation(item)
@@ -449,7 +455,7 @@ class PersonalApiTests(TestCase):
         review.save(update_fields=["status"])
         saved = self.client.put(
             f"/api/personal/contacts/{self.item.pk}/draft/",
-            {"subject": "Question pour Atelier Test", "body": "Observation verifiee."},
+            {"subject": "Question pour Atelier Test", "body": "Observation verifiee.", "expected_revision": 0},
             format="json",
         )
         self.assertEqual(saved.status_code, 200)
@@ -489,21 +495,22 @@ class PersonalApiTests(TestCase):
     @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend", DEFAULT_FROM_EMAIL="Test <test@sender.example>")
     def test_approved_saved_draft_sends_only_after_explicit_confirmation(self):
         review = documented_creation(self.item)
-        approved = self.client.post(f"/api/personal/qualification/{review.pk}/approve/")
-        self.assertEqual(approved.data["status"], "approved")
         subject, body = "Question", "Bonjour"
-        self.client.put(f"/api/personal/contacts/{self.item.pk}/draft/", {"subject": subject, "body": body}, format="json")
+        saved=self.client.put(f"/api/personal/contacts/{self.item.pk}/draft/",
+            {"subject":subject,"body":body,"expected_revision":0},format="json")
+        self.assertEqual(saved.status_code,200)
+        revision=saved.data["revision"]
+        approved=self.client.post(f"/api/personal/qualification/{review.pk}/approve/",
+                                  {"revision":revision},format="json")
+        self.assertEqual(approved.status_code,200,approved.data)
         with patch("prospection.mail.brevo_key", return_value=""), patch("prospection.mail.sender_address", return_value="Test <test@sender.example>"):
-            response = self.client.post(
-                f"/api/personal/contacts/{self.item.pk}/send-email/",
-                {"subject": subject, "body": body, "confirmed": True},
-                format="json",
-                HTTP_IDEMPOTENCY_KEY="approved-draft",
-            )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(mail.outbox[-1].to, [self.item.email])
-        self.assertEqual(mail.outbox[-1].body, body)
-        self.assertEqual(EmailDraft.objects.get(prospect=self.item).state, "sent")
+            response=self.client.post(f"/api/personal/contacts/{self.item.pk}/send-email/",
+                {"subject":subject,"body":body,"revision":revision,"confirmed":True},format="json",
+                HTTP_IDEMPOTENCY_KEY="approved-draft")
+        self.assertEqual(response.status_code,200,response.data)
+        self.assertEqual(mail.outbox[-1].to,[self.item.email])
+        self.assertEqual(mail.outbox[-1].body,body)
+        self.assertEqual(EmailDraft.objects.get(prospect=self.item).state,"sent")
 
     def test_legacy_generic_proposal_cannot_be_approved_or_overwritten(self):
         review = QualificationReview.objects.create(prospect=self.item, status="pending")
@@ -533,18 +540,23 @@ class PersonalApiTests(TestCase):
         self.assertEqual(checked.status_code, 200)
         self.assertEqual(checked.data["opportunity"], "creation")
         first.refresh_from_db()
+        first.evidence.append({"kind":"third_party_menu","url":"https://mairie.example/menu",
+            "source":"Annuaire fictif","detail":"Carte publiée chez un tiers.",
+            "observed_at":timezone.now().isoformat(),"origin":"human",
+            "method":"Page fictive recoupée.","limits":"Intérêt non confirmé."})
+        first.save(update_fields=["evidence"])
         for review in (first, second):
             review.evidence.append({"kind": "commercial_pilot"})
             review.save(update_fields=["evidence"])
         sample = self.client.get("/api/personal/qualification/", {"status": "pilot"})
         self.assertEqual(sample.data["count"], 2)
         saved = self.client.put(f"/api/personal/contacts/{self.item.pk}/draft/",
-                                {"subject": "Une idée", "body": "Texte relu."}, format="json")
+                                {"subject": "Une idée", "body": "Texte relu.", "expected_revision": 0}, format="json")
         self.assertEqual(saved.status_code, 200)
         self.assertEqual(self.client.post(endpoint + "defer/").status_code, 200)
         self.assertEqual(self.client.get("/api/personal/qualification/", {"status": "deferred"}).data["count"], 1)
         self.assertEqual(self.client.post(endpoint + "reopen/").status_code, 200)
-        self.assertEqual(self.client.post(endpoint + "approve/").status_code, 200)
+        self.assertEqual(self.client.post(endpoint + "approve/", {"revision":saved.data["revision"]},format="json").status_code, 200)
         remaining = self.client.get("/api/personal/qualification/", {"status": "ready"})
         self.assertEqual([row["id"] for row in remaining.data["results"]], [second.pk])
         sample = self.client.get("/api/personal/qualification/", {"status": "pilot"})
@@ -598,11 +610,24 @@ class MailTests(TestCase):
         self.sender_patch.start(); self.addCleanup(self.sender_patch.stop)
 
     def send_approved(self, subject, body, key, **kwargs):
-        EmailDraft.objects.update_or_create(
-            prospect=self.item,
-            defaults={"subject": subject, "body": body, "state": "draft", "sent_at": None},
-        )
-        return send_message(self.item, subject, body, key, approval_confirmed=True, **kwargs)
+        # Transport-unit fixture: a version-bound approval already exists.
+        # End-to-end qualification/approval is covered in test_drafts.
+        evidence={"kind":"corroborated_contact","url":"https://fixture.example/contact",
+            "source":"Fixture", "detail":"Contact fictif", "method":"Fixture isolée",
+            "limits":"Transport simulé","origin":"human","observed_at":timezone.now().isoformat()}
+        review=QualificationReview.objects.get(prospect=self.item)
+        # Keep the same proof on retries so the snapshot remains identical.
+        if not review.evidence:
+            review.evidence=[evidence];review.save(update_fields=["evidence"])
+        else:
+            evidence=review.evidence[0]
+        draft,_=EmailDraft.objects.update_or_create(prospect=self.item,
+            defaults={"subject":subject,"body":body,"state":"draft","sent_at":None,
+                      "evidence_snapshot":{"records":[evidence]}})
+        EmailDraft.objects.filter(pk=draft.pk).update(approved_revision=draft.revision)
+        QualificationReview.objects.filter(pk=review.pk).update(status="approved")
+        return send_message(self.item,subject,body,key,approval_confirmed=True,
+                            revision=draft.revision,**kwargs)
 
     def test_custom_message_logs_actual_recipient_and_is_idempotent(self):
         log = self.send_approved("Objet personnel", "Bonjour atelier", "request-1")
@@ -611,6 +636,7 @@ class MailTests(TestCase):
         self.assertEqual(log.recipient, self.item.email)
         self.assertEqual(self.send_approved(log.subject, log.body, "request-1").pk, log.pk)
         self.assertEqual(len(mail.outbox), 1)
+        self.item.refresh_from_db()
         self.assertIsNotNone(self.item.next_followup_at)
 
     def test_duplicate_different_key_blocked_unless_explicitly_forced(self):
@@ -630,6 +656,7 @@ class MailTests(TestCase):
         self.item.next_followup_at = timezone.now() - timedelta(days=1)
         self.item.save()
         self.send_approved("Relance", "Bonjour", "request-followup")
+        self.item.refresh_from_db()
         self.assertGreater(self.item.next_followup_at, timezone.now())
 
     def test_manual_confirmation_records_without_sending(self):

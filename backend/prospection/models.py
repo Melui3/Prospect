@@ -138,6 +138,8 @@ class EmailLog(models.Model):
     delivery_status = models.CharField(max_length=30, default="sent")
     delivery_updated_at = models.DateTimeField(null=True, blank=True)
     source = models.CharField(max_length=20, default="smtp")
+    draft_revision = models.PositiveIntegerField(null=True, blank=True)
+    draft_fingerprint = models.CharField(max_length=64, blank=True)
 
     class Meta:
         ordering = ["-sent_at"]
@@ -215,3 +217,39 @@ class EmailDraft(models.Model):
     state = models.CharField(max_length=10, choices=STATE_CHOICES, default="draft")
     updated_at = models.DateTimeField(auto_now=True)
     sent_at = models.DateTimeField(null=True, blank=True)
+
+    revision = models.PositiveIntegerField(default=0)
+    approved_revision = models.PositiveIntegerField(null=True, blank=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    sending_revision = models.PositiveIntegerField(null=True, blank=True)
+    evidence_snapshot = models.JSONField(default=dict, blank=True)
+    origin = models.CharField(max_length=20, default="manual")
+
+    def save(self, *args, **kwargs):
+        from .drafts import persist
+        return persist(self, *args, **kwargs)
+
+
+class EmailDraftVersion(models.Model):
+    draft = models.ForeignKey(EmailDraft, on_delete=models.CASCADE, related_name="versions")
+    number = models.PositiveIntegerField()
+    subject = models.CharField(max_length=200, blank=True)
+    body = models.TextField(blank=True)
+    recipient = models.EmailField(blank=True)
+    context = models.JSONField(default=dict)
+    evidence = models.JSONField(default=dict)
+    origin = models.CharField(max_length=20)
+    generator = models.CharField(max_length=80, blank=True)
+    template_id_snapshot = models.IntegerField(null=True, blank=True)
+    fingerprint = models.CharField(max_length=64)
+    created_at = models.DateTimeField(default=timezone.now)
+    approved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-number"]
+        constraints = [models.UniqueConstraint(fields=["draft", "number"], name="unique_draft_version")]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValueError("Les versions enregistrées sont immuables.")
+        return super().save(*args, **kwargs)
