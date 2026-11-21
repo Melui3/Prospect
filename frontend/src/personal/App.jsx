@@ -10,8 +10,9 @@ import Qualification from "./Qualification";
 import Preferences from "./Preferences";
 import { Loading, Notice } from "./common";
 import "./personal.css";
+import "./nateos.css";
 
-const nav = [["/dashboard", "Aujourd'hui", CalendarDays], ["/prospects", "Prospects", Users], ["/qualification", "Qualification", CheckCircle2], ["/campaigns", "Recherches", Radar], ["/templates", "Modeles email", Mail], ["/settings", "Reglages", Settings]];
+const nav = [["/dashboard", "Aujourd'hui", CalendarDays], ["/prospects", "Prospects", Users], ["/qualification", "Qualification", CheckCircle2], ["/campaigns", "Recherches", Radar], ["/templates", "Modèles email", Mail], ["/settings", "Réglages", Settings]];
 
 function Layout() {
   const [session, setSession] = useState(null);
@@ -29,8 +30,9 @@ function Layout() {
   };
   return <div className="personal">
     <aside className="p-sidebar">
-      <div className="p-brand"><img src={`${import.meta.env.BASE_URL}prospect-favicon.svg`} alt="" /><div><strong>Prospect</strong><span>Espace personnel</span></div></div>
-      <nav>{nav.map(([to, label, Icon]) => <NavLink key={to} to={to}><Icon size={18} /><span>{label}</span></NavLink>)}</nav>
+      <div className="p-brand"><span className="p-brand-mark"><Radar size={26} aria-hidden="true" /></span><div><span className="p-brand-owner">NateOS</span><strong>Prospect</strong><span className="p-brand-caption">Espace privé</span></div></div>
+      <span className="p-nav-label">Espace de travail</span>
+      <nav aria-label="Navigation de Prospect">{nav.map(([to, label, Icon]) => <NavLink key={to} to={to}><Icon size={18} /><span>{label}</span></NavLink>)}</nav>
       <div className="p-session"><LockKeyhole size={15} /><span>{session?.is_owner ? "Session privee" : "Acces prive"}</span>{session?.auth_required && session?.is_owner && <button title="Verrouiller" onClick={async () => { clearOwnerToken(); await refresh(); }}>Verrouiller</button>}</div>
     </aside>
     <main className="p-main">{!session ? <><Notice>{error}</Notice><Loading /></> : !session.is_owner ? <form className="p-unlock" onSubmit={unlock}><LockKeyhole size={30} /><h1>Acces personnel</h1><Notice>{error}</Notice><label>Token prive<input type="password" value={token} onChange={(e) => setToken(e.target.value)} required autoComplete="off" /></label><button className="p-button primary">Deverrouiller</button></form> : <Outlet />}</main>
@@ -44,7 +46,7 @@ export default function PersonalApp() {
     <Route path="prospects" element={<Contacts />} />
     <Route path="qualification" element={<Qualification />} />
     <Route path="campaigns" element={<Campaigns />} />
-    <Route path="templates" element={<Templates />} />
+    <Route path="templates" element={<div className="p-template-space"><Templates /></div>} />
     <Route path="settings" element={<Preferences />} />
     <Route path="*" element={<Navigate to="/dashboard" replace />} />
   </Route></Routes></HashRouter>;

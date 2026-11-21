@@ -1,4 +1,4 @@
-import { LoaderCircle } from "lucide-react";
+import { LoaderCircle, CircleAlert, CircleCheck } from "lucide-react";
 
 export const statuses = [
   ["new", "Nouveau"], ["contacted", "Contacte"], ["replied", "Repondu"],
@@ -18,6 +18,6 @@ export function IconButton({ icon: Icon, label, ...props }) {
   return <button type="button" className="p-icon" title={label} aria-label={label} {...props}><Icon size={17} /></button>;
 }
 export function Status({ value }) { return <span className={`p-status status-${value}`}>{statusLabel(value)}</span>; }
-export function Notice({ children, kind = "error" }) { return children ? <div role={kind === "error" ? "alert" : "status"} className={`p-notice ${kind}`}>{children}</div> : null; }
-export function Loading() { return <div className="p-loading"><LoaderCircle size={20} className="p-spin" /> Chargement...</div>; }
+export function Notice({ children, kind = "error" }) { return children ? <div role={kind === "error" ? "alert" : "status"} className={`p-notice ${kind}`}><strong className="p-notice-title">{kind === "error" ? <CircleAlert size={16} aria-hidden="true" /> : <CircleCheck size={16} aria-hidden="true" />}{kind === "error" ? "Attention" : "Confirmation"}</strong>{children}</div> : null; }
+export function Loading() { return <div className="p-loading" role="status" aria-live="polite"><LoaderCircle size={20} className="p-spin" /> Chargement...</div>; }
 export function Empty({ children }) { return <div className="p-empty">{children}</div>; }
