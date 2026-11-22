@@ -56,7 +56,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-# Base de données — SQLite en dev, PostgreSQL (Neon) en prod via DATABASE_URL
+# Base de donnÃ©es â€” SQLite en dev, PostgreSQL (Neon) en prod via DATABASE_URL
 DATABASE_URL = config("DATABASE_URL", default=None)
 
 if DATABASE_URL:
@@ -174,7 +174,12 @@ HTTP_JOB_BUDGET = config("HTTP_JOB_BUDGET", default=500, cast=int)
 HTTP_DOMAIN_INTERVAL = config("HTTP_DOMAIN_INTERVAL", default=1.1, cast=float)
 HTTP_SOURCE_INTERVAL = config("HTTP_SOURCE_INTERVAL", default=1.1, cast=float)
 
-# The discovery provider is the existing public search, without a paid API.
+# C1: externally disabled until the owner authorizes a real recipe. No paid fallback.
+DISCOVERY_ENABLED = config("DISCOVERY_ENABLED", default=False, cast=bool)
+DISCOVERY_PROVIDER = config("DISCOVERY_PROVIDER", default="tavily")
+TAVILY_API_KEY = config("TAVILY_API_KEY", default="")
+TAVILY_DAILY_LIMIT = config("TAVILY_DAILY_LIMIT", default=20, cast=int)
+TAVILY_MONTHLY_LIMIT = config("TAVILY_MONTHLY_LIMIT", default=600, cast=int)
 DISCOVERY_MAX_CANDIDATES = config("DISCOVERY_MAX_CANDIDATES", default=4, cast=int)
 DISCOVERY_EXTRA_PAGES = config("DISCOVERY_EXTRA_PAGES", default=2, cast=int)
 DISCOVERY_SEARCH_MAX_QUERIES = config("DISCOVERY_SEARCH_MAX_QUERIES", default=1, cast=int)

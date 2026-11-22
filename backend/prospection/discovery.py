@@ -86,45 +86,24 @@ def _search(job):
     state = job.payload["discovery"]
     company = state["input"]
     query = f'"{company["name"]}" "{company["city"]}" {company["activity"]} site officiel'
-    url = "https://search.brave.com/search?q=" + quote(query)
-    state["search_url"] = url
-    _save(job)
+    from .search_providers import search
     try:
-        response = _read(job, url, source="discovery_search")
+        result = search(query)
     except ConsultationError as exc:
-        _add(job, "search_blocked", url, str(exc),
-             "La recherche est bloquée. Aucune absence de site n’est déduite.",
-             http_status=exc.http_status, method="Tentative de recherche et contrôle des restrictions.")
+        _add(job, "search_blocked", "https://api.tavily.com/search", str(exc),
+             "Source de découverte indisponible. Aucun jugement sur l’entreprise ni absence de site n’est déduit.",
+             http_status=exc.http_status, method="Appel de recherche autorisé, sans contournement des restrictions.")
         _save(job)
         raise
-    soup = BeautifulSoup(response.text, "html.parser")
-    links = soup.select(".snippet a[href], .web-result a[href], a.result-header[href]")
-    empty = soup.select_one(".no-results")
-    if not links and not empty:
-        raise ConsultationError("Format de résultats de recherche inexploitable.",
-                                temporary=True, source="discovery_search")
-    urls = []
-    for link in links:
-        candidate = urljoin(url, link["href"])
-        parts = urlsplit(candidate)
-        if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password:
-            continue
-        host = parts.hostname.lower().removeprefix("www.")
-        if host in {"search.brave.com", "google.com", "bing.com", "facebook.com",
-                    "instagram.com", "linkedin.com"}:
-            continue
-        candidate = urlunsplit((parts.scheme, parts.netloc, parts.path or "/", parts.query, ""))
-        if candidate not in urls:
-            urls.append(candidate)
-    state["search_url"] = url
+    state["search_url"] = result["source_url"]
+    state["search_provider"] = result["provider"]
     state["search_completed"] = True
-    state["search_at"] = getattr(response, "prospect_observed_at", timezone.now().isoformat())
-    _add(job, "public_search", url,
-         f"Recherche terminée. {len(urls)} lien(s) candidat(s), au plus {settings.DISCOVERY_MAX_CANDIDATES} examinés.",
-         "Résultats limités à cette requête et aux pages accessibles. Un site non indexé peut exister.",
-         observed_at=state["search_at"],
-         method="Requête par nom, commune et activité, puis lecture des liens des résultats.")
-    return urls[:settings.DISCOVERY_MAX_CANDIDATES]
+    state["search_at"] = result["observed_at"]
+    _add(job, "public_search", result["source_url"],
+         f"Recherche par nom, commune et activité terminée. {len(result['urls'])} lien(s) candidat(s).",
+         "Résultats bornés à cette requête ; les extraits ne constituent pas des preuves. Un site non indexé peut exister.",
+         observed_at=result["observed_at"], method="Tavily Search basic ; vérification indépendante des pages candidates.")
+    return result["urls"]
 
 
 def _focus(soup, company):

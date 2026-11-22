@@ -4,7 +4,7 @@ import { decideQualification, errorMessage, getQualifications, runQualifications
 import { Empty, IconButton, Loading, Notice, formatDate, externalUrl } from "./common";
 
 const tabs = [
-  ["selection", "Sélection commerciale"], ["ready", "Toutes les propositions"], ["pilot", "Pilote commercial"],
+  ["selection", "Sélection commerciale"], ["ready", "Propositions (dont historiques)"], ["pilot", "Pilote commercial"],
   ["enrich", "À enrichir"], ["deferred", "Reportés"], ["approved", "Approuvés / à relire"],
   ["no_opportunity", "Sans opportunité démontrée"], ["excluded", "Exclus"],
 ];
@@ -86,15 +86,22 @@ function ReviewCard({ review, onUpdate, onDecision, dirty, setDirty, disabled })
     <p className="p-qualification-meta">Analyse du {formatDate(review.checked_at)}</p>
     {externalUrl(prospect.website) && <a className="p-link" href={externalUrl(prospect.website)} target="_blank" rel="noreferrer">Site renseigné</a>}
     <ul className="p-qualification-reasons">{review.reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul>
+    {review.selection_diagnostic?.code && <section aria-label="Motif de non-sélection">
+      <h3>Non retenu dans la sélection actuelle</h3>
+      <p>{review.selection_diagnostic.label}</p>
+      <p>{review.selection_diagnostic.usable_proof_count} preuve(s) recevable(s) sur {review.selection_diagnostic.active_proof_count} ; {review.selection_diagnostic.missing_origin_count} sans origine démontrée.</p>
+      {review.selection_diagnostic.historical_recovery && <p>{review.selection_diagnostic.historical_recovery}</p>}
+    </section>}
     <Evidence items={review.evidence} />
     <Notice>{error}</Notice><Notice kind="success">{notice}</Notice>
     {review.selection && <button className="p-button" disabled={busy} onClick={() => act(async () => {
-      if (dirty && !window.confirm("Générer une version et quitter le texte non enregistré ?")) return;
+      if ((dirty || draft.revision) && !window.confirm("Créer une nouvelle version personnalisée ? Les versions enregistrées seront conservées ; le texte non enregistré sera abandonné. Une nouvelle approbation sera obligatoire.")) return;
       await generateEmailDraft(prospect.id, draft.revision || 0);
       setDirty(false); await onUpdate();
     })}>{draft.revision ? "Générer une nouvelle version personnalisée" : "Préparer le brouillon personnalisé"}</button>}
     {editable && <section className="p-settings-fields">
       <h3>Brouillon · version {draft.revision || "non enregistrée"}</h3>
+      {draft.origin === "legacy" && <p>Brouillon historique conservé. Il ne provient pas du générateur personnalisé. Sa régénération exige un dossier retenu dans la sélection actuelle.</p>}
       <p>{draft.approved_revision === draft.revision && draft.revision ? "Cette version est approuvée." : "Cette version n’est pas approuvée. Toute modification exige une nouvelle validation."}</p>
       <label>Objet<input disabled={busy} value={draft.subject} maxLength={200} onChange={(e) => change("subject", e.target.value)} /></label>
       <label>Message<textarea disabled={busy} rows={12} value={draft.body} maxLength={50000} onChange={(e) => change("body", e.target.value)} /></label>
@@ -189,12 +196,17 @@ export default function Qualification() {
   return <div className="p-page">
     <header className="p-heading"><div><h1>Qualification</h1><p>Preuves, brouillons et décisions</p></div><div className="p-actions">
       <IconButton icon={RefreshCw} label="Actualiser" onClick={() => refresh().catch(report)} />
-      <button className="p-button" disabled={busy} onClick={run}><Search size={16} /> Analyser les anciennes fiches</button>
+      <button className="p-button" disabled={busy} onClick={run}><Search size={16} /> Analyser les fiches sans analyse</button>
     </div></header>
     <Notice>{error}</Notice><Notice kind="success">{message}</Notice>
     {status === "selection" && data?.selection && <section className="p-section">
       <h2>{data.count} opportunité(s) retenue(s) sur {data.selection.limit} maximum</h2>
       <p>Preuves nécessaires de moins de {data.selection.max_evidence_age_days} jours et contact corroboré. Validation humaine requise.</p>
+      <p>Les anciennes propositions et le pilote historique sont conservés séparément ; ils ne satisfont pas nécessairement les critères actuels.</p>
+      <details><summary>Motifs de non-sélection</summary>
+        <ul>{Object.entries(data.selection.omitted_counts || {}).map(([code, count]) => <li key={code}>{({contact_invalid: "Adresse absente ou invalide", contact_unverified_or_stale: "Contact non corroboré ou périmé", business_evidence_insufficient_or_stale: "Preuves commerciales insuffisantes ou périmées", human_decision_or_contacted_duplicate: "Décision humaine ou contact antérieur, doublons inclus", decision_or_status: "Décision ou statut incompatible", exclusion_or_outreach: "Exclusion ou contact antérieur", duplicate: "Doublon"})[code] || "Dossier non recevable"} : {count}</li>)}</ul>
+        <p>Le premier motif bloquant est compté pour chaque fiche. Aucun critère commercial n’a été assoupli.</p>
+      </details>
       <details><summary>Critères de classement</summary>
         <ol>{data.selection.criteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ol>
         <p>{data.selection.held_by_limit} autre(s) dossier(s) justifié(s) au-delà des cinq places.</p>

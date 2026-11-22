@@ -44,7 +44,7 @@ function JobProgress({ counts = {}, active, recent = [] }) {
         const [label, path] = jobKinds[job.kind] ?? ["Tâche", "/campaigns"];
         return <div className="p-job" key={job.id}><div className="p-job-content">
           <Link to={path}>{label} · {job.status === "error" ? "En erreur" : job.stage}</Link>
-          <small>{job.outcome_label}</small>{job.status === "error" && <small>{job.error}</small>}
+          <small>{job.outcome_label}</small>{job.status === "error" && <small>{job.error}</small>}{job.failure_explanation && <small>{job.failure_explanation}</small>}
           {job.observations?.length > 0 && <details><summary>Observations de la découverte</summary><Evidence items={job.observations} /></details>}
         </div></div>;
       })}

@@ -1,4 +1,4 @@
-param(
+﻿param(
   [switch]$Build,
   [ValidateRange(1024, 65535)]
   [int]$Port = 8765,
@@ -72,7 +72,25 @@ $activate = New-Object Threading.EventWaitHandle($false, 'AutoReset', "$instance
 $stop = New-Object Threading.EventWaitHandle($false, 'ManualReset', "$instanceName-stop")
 $ownsInstance = $false
 $service = $null
+$browserProcess = $null
+$profile = $null
 $window = [IntPtr]::Zero
+$startupProcess = $null
+$startupPath = $null
+function Set-StartupStatus([string]$Message) {
+  if ($startupPath) {
+    try { [IO.File]::WriteAllText($startupPath, $Message) } catch [IO.IOException] { }
+  }
+}
+function Close-StartupStatus {
+  if ($startupPath) {
+    Set-StartupStatus 'CLOSE'
+    if ($startupProcess) { $null = $startupProcess.WaitForExit(3000) }
+    Remove-Item -LiteralPath $startupPath -Force -ErrorAction SilentlyContinue
+    if ($startupProcess) { $startupProcess.Dispose(); $script:startupProcess = $null }
+    $script:startupPath = $null
+  }
+}
 try {
   try { $ownsInstance = $mutex.WaitOne(0) }
   catch [Threading.AbandonedMutexException] { $ownsInstance = $true }
@@ -81,12 +99,26 @@ try {
     return
   }
   $null = $stop.Reset()
+  New-Item -ItemType Directory -Force -Path $RuntimeDir | Out-Null
+  $startupPath = Join-Path $RuntimeDir ("startup-" + [Guid]::NewGuid().ToString('N') + '.txt')
+  Set-StartupStatus "Preparation de l'application."
+  try {
+    $statusHelper = Join-Path $ScriptDir 'Startup-Status.ps1'
+    $startupProcess = Start-Process "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -WindowStyle Hidden -PassThru -ArgumentList @(
+      '-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+      '-File', "`"$statusHelper`"", '-StatusPath', "`"$startupPath`"", '-OwnerProcessId', $PID)
+  } catch {
+    # Feedback is optional: preserve the functional application launcher.
+    Remove-Item -LiteralPath $startupPath -Force -ErrorAction SilentlyContinue
+    $startupPath = $null
+  }
   if (Test-PortOpen) {
     throw "Le port $Port est deja utilise. Ferme le service qui l'utilise ou choisis un autre port libre."
   }
   New-Item -ItemType Directory -Force -Path $RuntimeDir | Out-Null
 
   if ($Build -or !(Test-DesktopBuildCurrent)) {
+    Set-StartupStatus "Mise a jour de l’interface NateOS..."
     $buildBackup = Join-Path $BackendDir ("backups\desktop-build-" + [Guid]::NewGuid().ToString("N"))
     $staging = Join-Path $buildBackup "staging"
     $previous = Join-Path $buildBackup "previous"
@@ -120,6 +152,7 @@ try {
     }
   }
 
+  Set-StartupStatus "Verification de l’acces prive..."
   $env:DESKTOP_MODE = "True"
   $env:DESKTOP_AUTO_AUTH = "True"
   $env:DATABASE_URL = ""
@@ -160,6 +193,7 @@ try {
     Pop-Location
   }
 
+  Set-StartupStatus "Demarrage du serveur et du worker..."
   $info = New-Object Diagnostics.ProcessStartInfo
   $info.FileName = $env:ComSpec
   $info.Arguments = '/d /s /c ""{0}" -u manage.py desktop_run {1} > "{2}" 2>&1"' -f $VenvPython, $Port, $ServerLog
@@ -173,6 +207,7 @@ try {
   $deadline = [DateTime]::UtcNow.AddSeconds(60)
   while (!$service.HasExited -and [DateTime]::UtcNow -lt $deadline) {
     if ($stop.WaitOne(300)) { return }
+    if ($activate.WaitOne(0)) { Set-StartupStatus "Demarrage en cours ; ouverture automatique des que Prospect est pret." }
     if (Test-ProspectReady) {
       $ready = $true
       break
@@ -180,6 +215,7 @@ try {
   }
   if (!$ready) { throw "Le serveur ou le worker a echoue. Consulte le journal local : $ServerLog" }
 
+  Set-StartupStatus "Prospect est pret. Ouverture de la fenetre..."
   $browserPaths = @(
     "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
     "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
@@ -213,16 +249,19 @@ try {
   }
 "@
   $profile = Join-Path $RuntimeDir "browser"
+  if ($stop.WaitOne(0)) { return }
   $browserProcess = Start-Process $browser -ArgumentList "--user-data-dir=""$profile""", "--no-first-run", "--disable-extensions", "--disable-background-mode", "--app=$Url" -PassThru
   $deadline = [DateTime]::UtcNow.AddSeconds(30)
   while ($window -eq [IntPtr]::Zero -and [DateTime]::UtcNow -lt $deadline) {
     if ($stop.WaitOne(200)) { return }
+    if ($window -eq [IntPtr]::Zero -and $activate.WaitOne(0)) { Set-StartupStatus "Ouverture de la fenetre Prospect en cours..." }
     if ($service.HasExited) { throw "Le service Prospect s'est arrete. Consulte $ServerLog." }
     $browserProcess.Refresh()
     if (!$browserProcess.HasExited) { $window = $browserProcess.MainWindowHandle }
   }
   if ($window -eq [IntPtr]::Zero) { throw "La fenetre Prospect n'a pas pu s'ouvrir." }
 
+  Close-StartupStatus
   while ([ProspectWindow]::IsWindow($window)) {
     if ($stop.WaitOne(200)) { return }
     if ($service.HasExited) { throw "Le service Prospect s'est arrete. Consulte $ServerLog." }
@@ -233,6 +272,19 @@ try {
     }
   }
 } finally {
+  Close-StartupStatus
+  # An explicit stop can arrive after Edge starts but before its handle is recorded.
+  # Only this newly launched browser and its dedicated profile may be cleaned up.
+  if ($window -eq [IntPtr]::Zero -and $browserProcess -and !$browserProcess.HasExited) {
+    $ownedBrowser = Get-CimInstance Win32_Process -Filter ("ProcessId = {0}" -f $browserProcess.Id) -ErrorAction SilentlyContinue
+    if ($ownedBrowser -and $ownedBrowser.ExecutablePath -eq $browser -and $profile -and $ownedBrowser.CommandLine.Contains($profile)) {
+      $null = $browserProcess.CloseMainWindow()
+      if (!$browserProcess.WaitForExit(2000)) {
+        # Its root process was verified above; /T closes only that application's children.
+        & "$env:SystemRoot\System32\taskkill.exe" /PID $browserProcess.Id /T /F 2>$null | Out-Null
+      }
+    }
+  }
   if ($window -ne [IntPtr]::Zero -and [ProspectWindow]::IsWindow($window)) {
     $null = [ProspectWindow]::PostMessage($window, 0x10, [IntPtr]::Zero, [IntPtr]::Zero)
   }

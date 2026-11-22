@@ -35,6 +35,15 @@ class JobSerializer(serializers.ModelSerializer):
     outcome_label = serializers.SerializerMethodField()
     events = serializers.SerializerMethodField()
     observations = serializers.SerializerMethodField()
+    failure_explanation = serializers.SerializerMethodField()
+
+    def get_failure_explanation(self, obj):
+        if not obj.error:
+            return ""
+        blocked = any(e.get("kind") == "search_blocked" for e in obj.payload.get("discovery", {}).get("evidence", []))
+        if blocked or "robots.txt" in obj.error:
+            return "La source de découverte est bloquée ou indisponible. Ce résultat ne démontre pas l’absence de site ni de besoin commercial. " + ("Reprise programmée selon les quotas." if obj.status == "queued" else "Aucune relance automatique de cet échec.")
+        return "Consultation interrompue : aucun succès commercial ne peut être déduit de cette erreur."
 
     def get_outcome(self, obj):
         return job_outcome(obj)
@@ -51,7 +60,7 @@ class JobSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SearchJob
-        fields = ["id", "campaign", "prospect", "kind", "status", "stage", "total", "processed", "with_email", "attempts", "error", "updated_at", "next_run_at", "outcome", "outcome_label", "events", "observations"]
+        fields = ["id", "campaign", "prospect", "kind", "status", "stage", "total", "processed", "with_email", "attempts", "error", "updated_at", "next_run_at", "outcome", "outcome_label", "events", "observations", "failure_explanation"]
 
 
 class LogSerializer(serializers.ModelSerializer):
@@ -161,6 +170,12 @@ class ContactDetailSerializer(ContactSerializer):
 
 
 class QualificationSerializer(serializers.ModelSerializer):
+    selection_diagnostic = serializers.SerializerMethodField()
+
+    def get_selection_diagnostic(self, obj):
+        from .selection_diagnostics import diagnostic
+        return diagnostic(obj, self.context.get("omitted_by_review", {}).get(obj.pk) if "omitted_by_review" in self.context else "not_evaluated")
+
     selection = serializers.SerializerMethodField()
 
     def get_selection(self, obj):
@@ -175,7 +190,7 @@ class QualificationSerializer(serializers.ModelSerializer):
     class Meta:
         model = QualificationReview
         fields = ["id", "status", "priority", "reasons", "evidence", "checked_at", "prospect", "draft",
-                  "bucket", "opportunity", "suggestion", "selection"]
+                  "bucket", "opportunity", "suggestion", "selection", "selection_diagnostic"]
 
     def get_bucket(self, obj):
         return review_bucket(obj)
@@ -484,7 +499,7 @@ def qualification_queue(request):
     if status_filter == "selection":
         results = selected
     return Response({"count": counts.get(status_filter, 0), "counts": counts, "selection": policy,
-                     "results": QualificationSerializer(results, many=True, context={"selection": selection_data}).data})
+                     "results": QualificationSerializer(results, many=True, context={"selection": selection_data, "omitted_by_review": policy["omitted_by_review"]}).data})
 
 
 class CreationEvidenceSerializer(serializers.Serializer):

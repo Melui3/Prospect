@@ -127,11 +127,11 @@ def _cache_response(key, response):
         }, hours=24)
 
 
-def request(method, url, *, source, minimum_interval=0, **kwargs):
+def request(method, url, *, source, minimum_interval=0, before_send=None, **kwargs):
     domain = (urlsplit(url).hostname or "").lower()
     job = _current_job.get()
     fingerprint = hashlib.sha256(json.dumps(
-        [method, url, kwargs.get("params"), str(kwargs.get("data", ""))],
+        [method, url, kwargs.get("params"), str(kwargs.get("data", "")), kwargs.get("json")],
         sort_keys=True, default=str,
     ).encode()).hexdigest()
     key = f"http-response:{job.pk}:{fingerprint}" if job else ""
@@ -174,6 +174,8 @@ def request(method, url, *, source, minimum_interval=0, **kwargs):
         counts[source] = counts.get(source, 0) + 1
         job.payload["http_sources"] = counts
         _save_payload(job)
+    if before_send is not None:
+        before_send()
     try:
         kwargs.setdefault("allow_redirects", False)
         response = requests.request(method, url, **kwargs)

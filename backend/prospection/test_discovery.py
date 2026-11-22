@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 from urllib.parse import urlsplit
 from unittest.mock import patch
@@ -11,7 +12,8 @@ from .jobs import enqueue_qualification, recover_jobs, run_next_job
 from .models import Campaign, EmailDraft, Prospect, QualificationReview, SearchJob
 
 
-@override_settings(HTTP_DOMAIN_INTERVAL=0, HTTP_SOURCE_INTERVAL=0, HTTP_DOMAIN_BUDGET=200,
+@override_settings(DISCOVERY_ENABLED=True, DISCOVERY_PROVIDER="tavily", TAVILY_API_KEY="fictional",
+                   HTTP_DOMAIN_INTERVAL=0, HTTP_SOURCE_INTERVAL=0, HTTP_DOMAIN_BUDGET=200,
                    HTTP_SOURCE_BUDGET=200, WEBSITE_EMAIL_MAX_LOOKUPS=100,
                    DISCOVERY_MAX_CANDIDATES=4, DISCOVERY_EXTRA_PAGES=2)
 class DiscoveryTests(TestCase):
@@ -30,8 +32,10 @@ class DiscoveryTests(TestCase):
         self.calls.append(url)
         if urlsplit(url).path == "/robots.txt":
             text=self.pages.get(url,"User-agent: *\nAllow: /")
-        elif "search.brave.com/search" in url:
-            text=self.search_html
+        elif url == "https://api.tavily.com/search":
+            from bs4 import BeautifulSoup
+            urls=[a["href"] for a in BeautifulSoup(self.search_html,"html.parser").select("a[href]")]
+            text=json.dumps(getattr(self,"search_payload",{"results":[{"url":u} for u in urls]}))
         else:
             text=self.pages.get(url, (404,"Introuvable"))
         if isinstance(text, BaseException):raise text
@@ -267,10 +271,10 @@ class DiscoveryTests(TestCase):
         self.assertFalse(self.prospect.website)
         self.assertEqual(job.payload["outcome"],"insufficient_evidence")
 
-    def test_unrecognized_search_markup_blocks_without_claiming_empty_results(self):
-        self.search_html="<html>Service unavailable, please try later</html>"
+    def test_unrecognized_search_payload_blocks_without_claiming_empty_results(self):
+        self.search_payload={"unexpected": "Malformed provider payload"}
         job=self.run_discovery()
-        self.assertEqual(job.status,"queued")
+        self.assertEqual(job.status,"error")
         self.assertNotIn("public_search_no_official_site",[e["kind"] for e in job.payload["discovery"]["evidence"]])
         self.assertFalse(QualificationReview.objects.filter(prospect=self.prospect).exists())
 

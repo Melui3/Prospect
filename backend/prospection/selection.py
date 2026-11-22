@@ -183,13 +183,16 @@ def select_opportunities(reviews, *, now=None):
                 decisions.get(p.pk) in {"approved", "rejected", "deferred", "excluded"}):
             protected.add(groups[p.pk])
     omitted = Counter()
+    omitted_by_review = {}
     eligible = []
     for review in reviews:
         if groups.get(review.prospect_id) in protected:
+            omitted_by_review[review.pk] = "human_decision_or_contacted_duplicate"
             omitted["human_decision_or_contacted_duplicate"] += 1
             continue
         result, reason = _evaluate(review, now, max_age_days)
         if result is None:
+            omitted_by_review[review.pk] = reason
             omitted[reason] += 1
         else:
             key, info = result
@@ -200,17 +203,21 @@ def select_opportunities(reviews, *, now=None):
     for _, review, info in eligible:
         group = groups[review.prospect_id]
         if group in used:
+            omitted_by_review[review.pk] = "duplicate"
             omitted["duplicate"] += 1
             continue
         used.add(group)
         unique.append((review, info))
     chosen = unique[:LIMIT]
+    for review, _ in unique[LIMIT:]:
+        omitted_by_review[review.pk] = "held_by_limit"
     metadata = {}
     for rank, (review, info) in enumerate(chosen, start=1):
         metadata[review.pk] = {**info, "rank": rank}
     policy = {
         "limit": LIMIT, "selected_count": len(chosen), "eligible_count": len(eligible),
         "unique_count": len(unique), "held_by_limit": max(0, len(unique)-LIMIT),
+        "omitted_by_review": omitted_by_review,
         "omitted_counts": dict(omitted), "max_evidence_age_days": max_age_days,
         "policy_version": POLICY_VERSION, "services_url": SERVICES_URL,
         "criteria": [
