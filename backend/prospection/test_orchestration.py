@@ -34,7 +34,7 @@ class OrchestrationTests(TestCase):
         self.assertEqual(job.next_run_at, due)
         self.assertEqual(job.status, "error")
 
-    @patch("prospection.services._query_overpass", return_value=[])
+    @patch("prospection.company_discovery.discover_companies", return_value=[])
     @patch("prospection.services._get_city_coords", return_value=("1", "2"))
     def test_empty_search_reports_empty_scope(self, coords, overpass):
         job = enqueue_search(self.campaign)
@@ -203,7 +203,7 @@ class RecoveryAndPreservationTests(TestCase):
         job=SearchJob.objects.create(campaign=self.campaign,status="running",
             payload={"elements":[element],"capture_index":0,"ids":[],"enrich_index":0})
         recover_jobs()
-        with patch("prospection.services._query_overpass") as overpass:
+        with patch("prospection.company_discovery.discover_companies") as overpass:
             run_next_job()
             overpass.assert_not_called()
         self.assertEqual(Prospect.objects.count(),1)
@@ -283,7 +283,7 @@ class RecoveryAndPreservationTests(TestCase):
         job.refresh_from_db()
         self.assertEqual(job.status,"running")
         recover_jobs()
-        with patch("prospection.services._query_overpass") as overpass, patch("prospection.enrichment.enrich_prospect"):
+        with patch("prospection.company_discovery.discover_companies") as overpass, patch("prospection.enrichment.enrich_prospect"):
             run_next_job()
             overpass.assert_not_called()
         job.refresh_from_db()

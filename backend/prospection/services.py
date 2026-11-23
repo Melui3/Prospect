@@ -5,6 +5,8 @@ Services métier :
 """
 
 import time
+import hashlib
+import json
 import logging
 import re
 import unicodedata
@@ -16,6 +18,7 @@ from urllib.parse import parse_qs, unquote, urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 from django.conf import settings
+from django.utils import timezone
 from .consultations import ConsultationError, request
 
 logger = logging.getLogger(__name__)
@@ -158,35 +161,28 @@ def _get_city_coords(ville: str) -> tuple[str, str] | None:
         raise ProspectionTemporaryError("Le service de localisation ne repond pas. Nouvelle tentative programmee.") from exc
 
 
+def _validate_overpass_response(response):
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise ConsultationError("Réponse Overpass non JSON.", temporary=True, source="overpass") from exc
+    if (not isinstance(data, dict) or not isinstance(data.get("elements"), list)
+            or data.get("remark") or any(
+                not isinstance(row, dict) or row.get("type") not in ("node", "way", "relation")
+                or not isinstance(row.get("id"), int) for row in data.get("elements", [])
+            )):
+        raise ConsultationError("Réponse Overpass inexploitable.", temporary=True, source="overpass")
+
+
 def _query_overpass(tag_filters: str | list[str], lat: str, lon: str, rayon_m: int) -> list[dict]:
     if isinstance(tag_filters, str):
         tag_filters = [tag_filters]
 
     deadline = time.monotonic() + settings.OVERPASS_TOTAL_TIMEOUT
     elements_by_key = {}
-    errors = []
-
-    try:
-        for element in _query_overpass_filters(tag_filters, lat, lon, rayon_m, deadline):
-            element_key = (element.get("type"), element.get("id"))
-            elements_by_key[element_key] = element
-    except ConsultationError:
-        raise
-    except Exception as exc:
-        logger.warning("Overpass filters error for %s: %s", ", ".join(tag_filters), exc)
-        errors.append(str(exc))
-
-    if elements_by_key:
-        return list(elements_by_key.values())
-
-    if errors:
-        logger.warning("Overpass unavailable: %s", " | ".join(errors))
-        raise ProspectionTemporaryError(
-            "OpenStreetMap/Overpass ne repond pas pour le moment. "
-            "Reessaie dans quelques minutes, ou baisse le rayon de la campagne."
-        )
-
-    return []
+    for element in _query_overpass_filters(tag_filters, lat, lon, rayon_m, deadline):
+        elements_by_key[(element["type"], element["id"])] = element
+    return list(elements_by_key.values())
 
 
 def _query_overpass_filters(
@@ -196,64 +192,74 @@ def _query_overpass_filters(
     rayon_m: int,
     deadline: float,
 ) -> list[dict]:
-    remaining_seconds = max(1, int(deadline - time.monotonic()))
-    query_timeout = min(settings.OVERPASS_TIMEOUT, remaining_seconds)
+    from .consultations import _current_job
+    from .jobs import checkpoint
+
+    endpoints = list(dict.fromkeys(settings.OVERPASS_ENDPOINTS))
+    if not endpoints:
+        raise ValueError("Aucun point d'accès Overpass configuré.")
+    signature = hashlib.sha256(json.dumps(
+        [tag_filters, lat, lon, rayon_m, endpoints], sort_keys=True,
+    ).encode()).hexdigest()
+    job = _current_job.get()
+    state = job.payload.get("overpass", {}) if job else {}
+    if state.get("signature") != signature:
+        state = {"signature": signature, "next_endpoint": 0, "failures": []}
+
+    def save_cursor(index):
+        state["next_endpoint"] = index
+        if job:
+            job.payload["overpass"] = state
+            checkpoint(job, payload=job.payload)
+
     query_parts = []
     for tag_filter in tag_filters:
         query_parts.append(f"node[{tag_filter}](around:{rayon_m},{lat},{lon});")
         query_parts.append(f"way[{tag_filter}](around:{rayon_m},{lat},{lon});")
 
-    query = "\n".join(
-        [
-            f"[out:json][timeout:{query_timeout}];",
-            "(",
-            *query_parts,
-            ");",
-            "out tags;",
-        ]
-    )
-    errors = []
-    had_empty_response = False
-
-    for endpoint in settings.OVERPASS_ENDPOINTS:
+    for index in range(state["next_endpoint"], len(endpoints)):
+        endpoint = endpoints[index]
         remaining_seconds = deadline - time.monotonic()
         if remaining_seconds <= 0:
             break
-
+        query_timeout = min(settings.OVERPASS_TIMEOUT, max(1, int(remaining_seconds)))
+        query = "\n".join([
+            f"[out:json][timeout:{query_timeout}];", "(", *query_parts, ");", "out tags;",
+        ])
         try:
             resp = request("POST",
                 endpoint, source="overpass",
+                validate_response=_validate_overpass_response,
                 data=query.encode("utf-8"),
                 headers={**REQUEST_HEADERS, "Content-Type": "text/plain; charset=utf-8"},
-                timeout=max(
-                    1,
-                    min(
-                        settings.OVERPASS_ENDPOINT_TIMEOUT,
-                        settings.OVERPASS_TIMEOUT + 5,
-                        remaining_seconds,
-                    ),
-                ),
+                timeout=min(settings.OVERPASS_ENDPOINT_TIMEOUT,
+                            settings.OVERPASS_TIMEOUT + 5, remaining_seconds),
             )
-            resp.raise_for_status()
-            data = resp.json()
-            if not isinstance(data, dict) or not isinstance(data.get("elements"), list):
-                raise ConsultationError("Réponse Overpass inexploitable.", temporary=True, source="overpass")
-            elements = data["elements"]
-            if elements:
-                return elements
+        except ConsultationError as exc:
+            cause = exc.__cause__
+            # Only transport outages allow fallback, never provider restrictions.
+            if (not exc.temporary or exc.deferred or exc.retry_at or exc.http_status
+                    or not isinstance(cause, (requests.Timeout, requests.ConnectionError))
+                    or isinstance(cause, requests.exceptions.SSLError)):
+                raise
+            host = urlparse(endpoint).hostname
+            reason = type(cause).__name__
+            state["failures"] = (state["failures"] + [{
+                "host": host, "reason": reason, "at": timezone.now().isoformat(),
+            }])[-30:]
+            save_cursor(index + 1)
+            logger.warning("Overpass transport failure host=%s reason=%s next_endpoint=%s",
+                           host, reason, index + 1)
+            continue
+        save_cursor(0)
+        return resp.json()["elements"]
 
-            had_empty_response = True
-            logger.info("Overpass empty result on %s; trying next mirror", endpoint)
-        except ConsultationError:
-            raise
-        except Exception as exc:
-            logger.warning("Overpass error on %s: %s", endpoint, exc)
-            errors.append(f"{endpoint}: {exc}")
-
-    if had_empty_response:
-        return []
-
-    raise RuntimeError("Erreur Overpass : " + " | ".join(errors))
+    if state["next_endpoint"] >= len(endpoints):
+        save_cursor(0)
+    raise ConsultationError(
+        "Overpass temporairement indisponible : délai global atteint ou points d'accès injoignables. "
+        "Une reprise bornée sera programmée par le worker.", temporary=True, source="overpass",
+    )
 
 
 def _find_email_pages_jaunes(nom: str, ville: str) -> str | None:

@@ -234,7 +234,7 @@ class JobTests(TestCase):
         self.assertEqual(prospection_jobs.enqueue_due_scheduled_searches(), 0)
         self.assertEqual(self.campaign.jobs.count(), 1)
 
-    @patch("prospection.services._query_overpass", return_value=[])
+    @patch("prospection.company_discovery.discover_companies", return_value=[])
     @patch("prospection.services._get_city_coords", return_value=("48", "-1"))
     def test_worker_automatically_runs_a_due_repeating_campaign(self, coords, overpass):
         self.campaign.repeat_days = 7
@@ -249,7 +249,7 @@ class JobTests(TestCase):
         self.assertGreater(self.campaign.next_search_at, timezone.now() + timedelta(days=6))
         overpass.assert_called_once()
 
-    @patch("prospection.services._query_overpass", return_value=[])
+    @patch("prospection.company_discovery.discover_companies", return_value=[])
     @patch("prospection.services._get_city_coords", return_value=("48", "-1"))
     def test_completed_repeating_campaign_schedules_next_search(self, coords, overpass):
         self.campaign.repeat_days = 7
@@ -264,7 +264,7 @@ class JobTests(TestCase):
         self.assertFalse(SearchJob.objects.filter(campaign=self.campaign, status="queued").exists())
 
     @patch("prospection.enrichment.enrich_prospect")
-    @patch("prospection.services._query_overpass", return_value=[element(website="https://atelier.example")])
+    @patch("prospection.company_discovery.discover_companies", return_value=[element(website="https://atelier.example")])
     @patch("prospection.services._get_city_coords", return_value=("48", "-1"))
     def test_job_captures_then_queues_discovery(self, coords, overpass, enrich):
         job = enqueue_search(self.campaign)
@@ -279,7 +279,7 @@ class JobTests(TestCase):
 
     @patch("prospection.discovery._search", return_value=[])
     @patch("prospection.enrichment.enrich_prospect")
-    @patch("prospection.services._query_overpass", return_value=[element()])
+    @patch("prospection.company_discovery.discover_companies", return_value=[element()])
     @patch("prospection.services._get_city_coords", return_value=("48", "-1"))
     def test_search_queues_qualification_without_sending_email(self, coords, overpass, enrich, search):
         job = enqueue_search(self.campaign)
@@ -324,7 +324,7 @@ class JobTests(TestCase):
         self.assertEqual(job.processed, 1)
 
     @patch("prospection.enrichment.enrich_prospect")
-    @patch("prospection.services._query_overpass")
+    @patch("prospection.company_discovery.discover_companies")
     def test_resume_uses_saved_results_instead_of_requery(self, overpass, enrich):
         item = capture_prospect(self.campaign, element())
         job = SearchJob.objects.create(campaign=self.campaign, payload={"elements": [element()], "capture_index": 1, "ids": [item.pk], "enrich_index": 0})

@@ -213,15 +213,15 @@ class DiscoveryTests(TestCase):
         from .models import EmailLog
         self.prospect.delete()
         self.pages["https://nominatim.openstreetmap.org/search"]=json.dumps([{"lat":"48","lon":"-1"}])
-        self.pages[settings.OVERPASS_ENDPOINTS[0]]=json.dumps({"elements":[{
-            "type":"node","id":321,"tags":{"name":"Café des Pins","addr:city":"Testville"}}]})
+        from .test_company_discovery import URL, payload
+        self.pages[URL]=json.dumps(payload())
         url="https://annuaire-restos.fr/fiche/cafe-pins/"
         self.search(url)
         self.pages[url]=self.page(extra="<h2>Carte du midi</h2><p>Plat de saison.</p>")
         with override_settings(DESKTOP_AUTO_AUTH=False,OWNER_ACCESS_TOKEN="",REQUIRE_OWNER_TOKEN=False):
             response=APIClient().post(f"/api/personal/campaigns/{self.campaign.pk}/launch/")
         self.assertEqual(response.status_code,202)
-        self.assertTrue(run_next_job())  # OSM search and persistent discovery enqueue.
+        self.assertTrue(run_next_job())  # Administrative discovery and persistent qualification enqueue.
         self.assertTrue(run_next_job())  # Automatic discovery, identity and public proofs.
         p=Prospect.objects.get()
         review=QualificationReview.objects.get(prospect=p)

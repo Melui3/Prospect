@@ -3,7 +3,7 @@ from email.utils import parseaddr
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Q, Value, When
+from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Q, Value, When, F
 from django.utils import timezone
 from rest_framework import serializers, viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
@@ -14,6 +14,7 @@ from rest_framework.response import Response
 
 from .drafts import DraftError, generate, approve, lock_prospect, selected_info, bound_info, assert_approved
 from .consultations import ConsultationError
+from .run_limits import stop_campaign, schedule_pilot, guard_job, PilotStopped, unresolved_children
 from .identity import identity_key
 from .jobs import REPEAT_INTERVAL_DAYS, enqueue_enrichment, enqueue_qualification, enqueue_search, job_outcome, OUTCOME_LABELS
 from .mail import MailError, send_message, sync_delivery
@@ -60,7 +61,7 @@ class JobSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SearchJob
-        fields = ["id", "campaign", "prospect", "kind", "status", "stage", "total", "processed", "with_email", "attempts", "error", "updated_at", "next_run_at", "outcome", "outcome_label", "events", "observations", "failure_explanation"]
+        fields = ["id", "campaign", "prospect", "kind", "status", "stage", "total", "processed", "with_email", "attempts", "error", "updated_at", "next_run_at", "outcome", "outcome_label", "events", "observations", "failure_explanation", "parent_search", "pilot_deadline", "pilot_tavily_attempts", "stopped_at"]
 
 
 class LogSerializer(serializers.ModelSerializer):
@@ -384,11 +385,23 @@ class PersonalCampaignSerializer(serializers.ModelSerializer):
     total_prospects = serializers.ReadOnlyField()
     prospects_with_email = serializers.ReadOnlyField()
     job = serializers.SerializerMethodField()
+    can_stop = serializers.SerializerMethodField()
+    pilot_once = serializers.SerializerMethodField()
     rayon_km = serializers.IntegerField(min_value=1, max_value=30)
     class Meta:
         model = Campaign
-        fields = ["id", "secteur", "ville", "rayon_km", "repeat_days", "next_search_at", "status", "error_message", "created_at", "total_prospects", "prospects_with_email", "job"]
+        fields = ["id", "secteur", "ville", "rayon_km", "repeat_days", "next_search_at", "status", "error_message", "created_at", "total_prospects", "prospects_with_email", "job", "can_stop", "pilot_once"]
         read_only_fields = ["next_search_at", "status", "error_message", "created_at"]
+
+    def get_can_stop(self, obj):
+        if obj.repeat_days or obj.next_search_at or unresolved_children(obj.pk).exists():
+            return True
+        return (obj.jobs.filter(status__in=["queued", "running"]).exists()
+            or SearchJob.objects.filter(parent_search__campaign=obj,
+                status__in=["queued", "running"]).exists())
+
+    def get_pilot_once(self, obj):
+        return obj.jobs.filter(pilot_deadline__isnull=False).exists()
 
     def get_job(self, obj):
         jobs = list(obj.jobs.all())
@@ -409,14 +422,46 @@ class PersonalCampaignViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def launch(self, request, pk=None):
-        return Response(JobSerializer(enqueue_search(self.get_object())).data, status=202)
+        try:
+            job = enqueue_search(self.get_object())
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=409)
+        return Response(JobSerializer(job).data, status=202)
 
     @action(detail=True, methods=["post"])
+    def stop(self, request, pk=None):
+        campaign = self.get_object()
+        try:
+            unresolved = stop_campaign(campaign.pk)
+            if unresolved:
+                return Response({"error": "Campagne arrêtée. Des qualifications historiques sans lien certain restent à examiner ; elles ne sont pas arrêtées par supposition."}, status=409)
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=409)
+        campaign.refresh_from_db()
+        return Response(self.get_serializer(campaign).data)
+
+    @action(detail=True, methods=["post"], url_path="schedule-pilot")
+    def schedule_pilot_once(self, request, pk=None):
+        field = serializers.DateTimeField()
+        try:
+            start_at = field.run_validation(request.data.get("start_at"))
+            job = schedule_pilot(self.get_object(), start_at)
+        except (ValueError, serializers.ValidationError) as exc:
+            return Response({"error": str(exc)}, status=409)
+        return Response(JobSerializer(job).data, status=202)
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
     def schedule(self, request, pk=None):
         campaign = self.get_object()
+        Campaign.objects.filter(pk=campaign.pk).update(status=F("status"))
+        campaign.refresh_from_db()
         serializer = CampaignScheduleSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         repeat_days = serializer.validated_data["repeat_days"]
+        if repeat_days and (campaign.jobs.filter(pilot_deadline__isnull=False).exists()
+                            or campaign.jobs.filter(stopped_at__isnull=False).exists()):
+            return Response({"error": "Campagne arrêtée ou pilote à occurrence unique."}, status=409)
         active = campaign.jobs.filter(status__in=["queued", "running", "paused"]).exists()
         campaign.repeat_days = repeat_days
         campaign.next_search_at = (
@@ -429,9 +474,10 @@ class PersonalCampaignViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         campaign = self.get_object()
-        if campaign.jobs.filter(status="running").exists():
-            return Response({"error": "Mets cette recherche en pause avant de la supprimer."}, status=409)
-        return super().destroy(request, *args, **kwargs)
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=409)
 
 
 class JobViewSet(viewsets.ReadOnlyModelViewSet):
@@ -445,6 +491,15 @@ class JobViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=["post"])
     def pause(self, request, pk=None):
         job = self.get_object()
+        if job.kind == "search" and job.campaign_id:
+            try:
+                unresolved = stop_campaign(job.campaign_id)
+                if unresolved:
+                    return Response({"error": "Campagne arrêtée ; qualifications historiques sans lien certain à examiner."}, status=409)
+            except ValueError as exc:
+                return Response({"error": str(exc)}, status=409)
+            job.refresh_from_db()
+            return Response(JobSerializer(job).data)
         if job.status in ["running", "queued"]:
             job.status = "paused"
             job.stage = "En pause"
@@ -456,6 +511,15 @@ class JobViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=["post"])
     def resume(self, request, pk=None):
         job = self.get_object()
+        if job.kind == "search" and job.pilot_deadline is None and job.stopped_at and job.campaign_id:
+            # Explicit resume preserves the ordinary pause/resume path, but never recurrence.
+            SearchJob.objects.filter(pk=job.pk).update(stopped_at=None)
+            SearchJob.objects.filter(parent_search=job, status="paused").update(status="queued")
+            job.refresh_from_db()
+        try:
+            guard_job(job, running=False)
+        except PilotStopped as exc:
+            return Response({"error": str(exc)}, status=409)
         if job.status in ["error", "paused"]:
             job.status = "queued"
             job.stage = "Reprise programmee"

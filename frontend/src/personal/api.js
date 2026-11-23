@@ -19,6 +19,7 @@ export const enrichContact = (id) => changed(api.post(`${root}/contacts/${id}/en
 export const sendMessage = (id, data, key) => changed(api.post(`${root}/contacts/${id}/send-email/`, data, { headers: { "Idempotency-Key": key } }));
 export const getCampaigns = (force = false) => cached(`${root}/campaigns/`, {}, force);
 export const createCampaign = (data) => changed(api.post(`${root}/campaigns/`, data));
+export const stopCampaign = (id) => changed(api.post(`${root}/campaigns/${id}/stop/`));
 export const launchCampaign = (id) => changed(api.post(`${root}/campaigns/${id}/launch/`));
 export const setCampaignSchedule = (id, repeat_days) => changed(api.post(`${root}/campaigns/${id}/schedule/`, { repeat_days }));
 export const deleteCampaign = (id) => changed(api.delete(`${root}/campaigns/${id}/`));

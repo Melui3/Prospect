@@ -15,9 +15,12 @@ from .models import ServiceCache
 TAVILY_URL = 'https://api.tavily.com/search'
 
 
+@transaction.atomic
 def _reserve_tavily_credit():
     # Ledger keys contain the calendar period, not the cache TTL: cleanup must not
     # reset spending in the middle of a month. Reserve uncertain/failed calls too.
+    from .run_limits import reserve_pilot_attempt
+    reserve_pilot_attempt()
     now = timezone.now()
     local = timezone.localtime(now)
     tomorrow = (local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -92,6 +95,8 @@ PROVIDERS = {'tavily': _tavily}
 
 
 def search(query):
+    from .run_limits import guard_current
+    guard_current()
     if not settings.DISCOVERY_ENABLED:
         raise ConsultationError('Découverte externe désactivée. Une autorisation de recherche réelle et la configuration Tavily sont nécessaires.', source='discovery_search')
     provider = PROVIDERS.get(settings.DISCOVERY_PROVIDER)

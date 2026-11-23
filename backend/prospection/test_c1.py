@@ -139,6 +139,32 @@ class C1PipelineTests(TestCase):
         self.assertEqual(updated.status_code,200,updated.data);self.assertIsNone(updated.data['approved_revision'])
         self.assertFalse(EmailLog.objects.exists())
 
+    def test_campaign_to_automatic_draft_without_preselected_record(self):
+        from .jobs import enqueue_search
+        self.prospect.delete()  # Empty fictional database: the campaign must discover the company.
+        url='https://annuaire-restos.fr/fiche/cafe-pins/'
+        self.search(url)
+        self.pages[url]=self.page(extra='<h2>Carte du midi</h2><p>Soupe et dessert.</p>')
+        osm=[{'type':'node','id':987,'lat':48.0,'lon':-1.0,'tags':{
+            'name':'Café des Pins','amenity':'restaurant','addr:city':'Testville'}}]
+        with patch('prospection.services._get_city_coords',return_value=(48.0,-1.0)),patch('prospection.company_discovery.discover_companies',return_value=osm):
+            job=enqueue_search(self.campaign)
+            self.assertTrue(run_next_job())
+        job.refresh_from_db();self.assertEqual(job.status,'done')
+        self.assertEqual(Prospect.objects.count(),1)
+        self.assertTrue(run_next_job())
+        review=QualificationReview.objects.select_related('prospect').get()
+        self.assertEqual(review.status,'pending')
+        draft=EmailDraft.objects.get(prospect=review.prospect)
+        self.assertEqual(draft.origin,'conditional')
+        self.assertIn('Carte du midi',draft.body)
+        self.assertIn('NateOS',draft.body)
+        self.assertIn('https://nathaniel-dev.fr/',draft.body)
+        self.assertIsNone(draft.approved_revision)
+        approval=APIClient().post(f'/api/personal/qualification/{review.pk}/approve/',{'revision':draft.revision},format='json')
+        self.assertEqual(approval.status_code,200,approval.data)
+        self.assertFalse(EmailLog.objects.exists())
+
     def test_omission_reasons_are_exposed_without_changing_criteria(self):
         QualificationReview.objects.create(prospect=self.prospect,status='pending')
         result=APIClient().get('/api/personal/qualification/?status=enrich').data

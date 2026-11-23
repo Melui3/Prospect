@@ -31,6 +31,21 @@ class Campaign(models.Model):
     def __str__(self):
         return f"{self.secteur} — {self.ville}"
 
+    def delete(self, *args, **kwargs):
+        from django.db import transaction
+        from django.db.models import F
+        from .run_limits import stop_campaign, unresolved_children
+        with transaction.atomic():
+            Campaign.objects.filter(pk=self.pk).update(status=F('status'))
+            if (self.jobs.filter(status__in=['queued', 'running']).exists()
+                    or SearchJob.objects.filter(parent_search__campaign=self,
+                        status__in=['queued', 'running']).exists()):
+                raise ValueError('Arrête cette campagne et ses qualifications avant de la supprimer.')
+            if unresolved_children(self.pk).exists():
+                raise ValueError('Qualifications historiques sans provenance certaine : suppression refusée.')
+            stop_campaign(self.pk)
+            return super().delete(*args, **kwargs)
+
     @property
     def total_prospects(self):
         return self.discovered_prospects.filter(merged_into=None).count()
@@ -159,7 +174,11 @@ class ProspectEvent(models.Model):
 
 
 class SearchJob(models.Model):
-    campaign = models.ForeignKey(Campaign, null=True, on_delete=models.CASCADE, related_name="jobs")
+    parent_search = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='qualification_jobs')
+    pilot_deadline = models.DateTimeField(null=True, blank=True, db_index=True)
+    pilot_tavily_attempts = models.PositiveSmallIntegerField(default=0)
+    stopped_at = models.DateTimeField(null=True, blank=True)
+    campaign = models.ForeignKey(Campaign, null=True, on_delete=models.SET_NULL, related_name="jobs")
     prospect = models.ForeignKey(Prospect, null=True, on_delete=models.CASCADE, related_name="jobs")
     kind = models.CharField(max_length=20, default="search")
     status = models.CharField(max_length=20, default="queued", db_index=True)

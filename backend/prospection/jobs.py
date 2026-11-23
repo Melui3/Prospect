@@ -3,11 +3,12 @@ import logging
 import random
 
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Q
 from django.utils import timezone
 
 from .consultations import ConsultationError, job_consultations
 from .models import Campaign, Prospect, QualificationReview, SearchJob
+from .run_limits import JobPaused, PilotStopped, guard_job, expire_pilots, stop_campaign
 
 logger = logging.getLogger(__name__)
 REPEAT_INTERVAL_DAYS = {7, 14, 30}
@@ -34,11 +35,8 @@ def record_outcome(job, outcome, **details):
 
 
 
-class JobPaused(Exception):
-    pass
-
-
 def checkpoint(job, **values):
+    guard_job(job)
     if not SearchJob.objects.filter(pk=job.pk, status="running").exists():
         raise JobPaused()
     for key, value in values.items():
@@ -50,7 +48,11 @@ def checkpoint(job, **values):
 def enqueue_search(campaign):
     # Acquire the campaign write lock before checking for an active job on SQLite.
     Campaign.objects.filter(pk=campaign.pk).update(status=F("status"))
+    if campaign.jobs.filter(pilot_deadline__isnull=False).exists():
+        raise ValueError("Un pilote ne peut avoir qu'une occurrence par campagne.")
     active = campaign.jobs.filter(status__in=["queued", "running", "paused"]).first()
+    if active and active.stopped_at:
+        raise ValueError("Cette campagne est arrêtée ; aucun redémarrage implicite.")
     if active:
         if active.status == "paused":
             active.status = "queued"
@@ -75,7 +77,7 @@ def _set_next_search(campaign_id, anchor=None):
     next_search_at = None
     if campaign.repeat_days in REPEAT_INTERVAL_DAYS:
         next_search_at = (anchor or timezone.now()) + timedelta(days=campaign.repeat_days)
-    Campaign.objects.filter(pk=campaign_id).update(next_search_at=next_search_at)
+    Campaign.objects.filter(pk=campaign_id, repeat_days=campaign.repeat_days).update(next_search_at=next_search_at)
 
 
 @transaction.atomic
@@ -87,6 +89,9 @@ def enqueue_due_scheduled_searches(now=None):
     ).order_by("next_search_at", "pk")
     enqueued = 0
     for campaign in campaigns:
+        if campaign.jobs.filter(Q(stopped_at__isnull=False) | Q(pilot_deadline__isnull=False)).exists():
+            Campaign.objects.filter(pk=campaign.pk).update(repeat_days=0, next_search_at=None)
+            continue
         if not Campaign.objects.filter(pk=campaign.pk, next_search_at__lte=now).exists():
             continue
         if campaign.jobs.filter(status__in=["queued", "running", "paused"]).exists():
@@ -106,9 +111,12 @@ def enqueue_enrichment(prospect):
     return SearchJob.objects.create(prospect=prospect, kind="enrichment", total=1, payload={"force": True})
 
 
-def enqueue_qualification(prospect, *, discover=False, recheck=False):
+@transaction.atomic
+def enqueue_qualification(prospect, *, discover=False, recheck=False, parent_search=None):
     from .qualification import prospect_is_eligible
 
+    if parent_search:
+        guard_job(parent_search)
     if not prospect_is_eligible(prospect):
         return None
     existing = QualificationReview.objects.filter(prospect=prospect).first()
@@ -117,7 +125,11 @@ def enqueue_qualification(prospect, *, discover=False, recheck=False):
     active = prospect.jobs.filter(kind="qualification", status__in=["queued", "running", "paused"]).first()
     if active:
         return active
-    return SearchJob.objects.create(prospect=prospect, kind="qualification", total=1, payload={"discover": discover})
+    child = SearchJob.objects.create(prospect=prospect, kind="qualification", total=1,
+        parent_search=parent_search, payload={"discover": discover})
+    if parent_search:
+        guard_job(parent_search)
+    return child
 
 
 def process_search(job):
@@ -128,10 +140,25 @@ def process_search(job):
     campaign = job.campaign
     if "elements" not in payload:
         checkpoint(job, stage="Recherche des entreprises")
-        coords = _get_city_coords(campaign.ville)
-        if not coords:
-            raise ValueError(f"Ville introuvable : {campaign.ville}")
-        elements = _query_overpass(OSM_TAGS.get(campaign.secteur.lower(), f'"shop"="{campaign.secteur}"'), *coords, campaign.rayon_km * 1000)
+        provider = payload.get("company_discovery_provider")
+        if provider is None:
+            provider = "overpass" if payload.get("overpass") or payload.get("http_sources", {}).get("overpass") else "recherche_entreprises"
+            payload["company_discovery_provider"] = provider
+            checkpoint(job, payload=payload)
+        if provider == "overpass":
+            # Already-started historical jobs retain their source and progress.
+            coords = _get_city_coords(campaign.ville)
+            if not coords:
+                raise ValueError(f"Ville introuvable : {campaign.ville}")
+            elements = _query_overpass(OSM_TAGS.get(campaign.secteur.lower(), f'"shop"="{campaign.secteur}"'), *coords, campaign.rayon_km * 1000)
+        elif provider == "recherche_entreprises":
+            from .company_discovery import discover_companies
+            elements = discover_companies(job)
+        else:
+            raise ValueError("Fournisseur de découverte historique inconnu : reprise bloquée.")
+        if job.pilot_deadline is not None:
+            payload["pilot_omitted_count"] = max(0, len(elements)-5) + payload.get("company_discovery", {}).get("limit_omitted", 0)
+            elements = elements[:5]
         payload.update({"elements": elements, "capture_index": 0, "ids": [], "enrich_index": 0})
         checkpoint(job, payload=payload, total=len(elements), stage="Enregistrement des pistes")
     for index in range(payload["capture_index"], len(payload["elements"])):
@@ -148,7 +175,7 @@ def process_search(job):
         if item:
             from .qualification import prospect_is_eligible
             if prospect_is_eligible(item):
-                enqueue_qualification(item, discover=True)
+                enqueue_qualification(item, discover=True, parent_search=job)
             else:
                 payload.setdefault("excluded_ids", [])
                 if item.pk not in payload["excluded_ids"]:
@@ -159,6 +186,7 @@ def process_search(job):
 
 
 def run_next_job():
+    expire_pilots()
     enqueue_due_scheduled_searches()
     now = timezone.now()
     ready = SearchJob.objects.filter(status="queued", next_run_at__lte=now)
@@ -179,6 +207,8 @@ def run_next_job():
     try:
         with job_consultations(job):
             _process_job(job)
+    except PilotStopped as exc:
+        stop_campaign(exc.campaign_id, str(exc))
     except JobPaused:
         if job.campaign:
             state = SearchJob.objects.filter(pk=job.pk).values_list("status", flat=True).first()
@@ -224,7 +254,13 @@ def _process_job(job):
         if job.payload.get("ids"):
             all_excluded = set(job.payload["ids"]) <= set(job.payload.get("excluded_ids", []))
             outcome = "excluded" if all_excluded else "insufficient_evidence"
-        final_stage = "Recherche terminée, qualification séparée" if outcome == "insufficient_evidence" else OUTCOME_LABELS[outcome]
+        administrative = job.payload.get("company_discovery", {})
+        if not job.payload.get("ids") and administrative.get("returned_units", 0):
+            rejections = administrative.get("rejections", {})
+            excluded = set(rejections) <= {"commercial_opposition", "existing_opposition", "diffusion_restricted_or_unknown"}
+            outcome = "excluded" if rejections and excluded else "insufficient_evidence"
+        final_stage = ("Recherche terminée, qualification séparée" if outcome == "insufficient_evidence" and job.payload.get("ids")
+                       else OUTCOME_LABELS[outcome])
     elif job.kind == "qualification":
         from .qualification import opportunity, qualify_prospect
         if job.payload.get("discover"):
@@ -244,7 +280,10 @@ def _process_job(job):
         elif opportunity(review):
             outcome = "verified"
         from .drafts import prepare_selected_missing
-        job.payload["draft_preparation"] = prepare_selected_missing()
+        guard_job(job)
+        root = job.parent_search
+        job.payload["draft_preparation"] = prepare_selected_missing(
+            prospect_ids=root.payload.get("ids", []) if root and root.pilot_deadline else None)
         checkpoint(job, processed=1)
     elif job.kind == "enrichment":
         enrich_prospect(job.prospect, force=job.payload.get("force", False))
@@ -266,6 +305,7 @@ def _process_job(job):
 
 
 def recover_jobs():
+    expire_pilots()
     # Preserve provider deadlines and retry budgets across worker restarts.
     for job in SearchJob.objects.filter(status="running", attempts__gte=3):
         job.payload["outcome"] = "permanent_error"

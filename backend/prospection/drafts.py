@@ -41,6 +41,8 @@ def snapshot(draft, number, context, origin=None):
 
 @transaction.atomic
 def persist(draft, *args, **kwargs):
+    from .run_limits import guard_current
+    guard_current()
     prospect=lock_prospect(draft.prospect_id)
     previous=EmailDraft.objects.select_for_update().filter(pk=draft.pk).first() if draft.pk else None
     if hasattr(draft,"expected_revision") and draft.expected_revision != (previous.revision if previous else 0):
@@ -72,6 +74,7 @@ def persist(draft, *args, **kwargs):
     models.Model.save(draft,*args,**kwargs)
     if changed:
         snapshot(draft,draft.revision,context)
+    guard_current()
     draft.force_new_version=False
     if hasattr(draft, "expected_revision"):
         draft.expected_revision=draft.revision
@@ -144,11 +147,15 @@ def generate(prospect_id, expected_revision):
     draft.save()
     return draft
 
-def prepare_selected_missing():
+def prepare_selected_missing(prospect_ids=None):
     reviews=list(QualificationReview.objects.select_related("prospect").all())
     chosen,_,_=select_opportunities(reviews)
     result={"created":0,"preserved":0,"blocked":[]}
     for review in chosen:
+        if prospect_ids is not None and review.prospect_id not in prospect_ids:
+            continue
+        from .run_limits import guard_current
+        guard_current()
         if EmailDraft.objects.filter(prospect_id=review.prospect_id).exists():
             result["preserved"]+=1
             continue

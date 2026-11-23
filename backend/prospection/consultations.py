@@ -35,6 +35,8 @@ class ConsultationError(Exception):
 
 @contextmanager
 def job_consultations(job):
+    from .run_limits import guard_job
+    guard_job(job)
     token = _current_job.set(job)
     deadline_token = _execution_deadline.set(
         time.monotonic() + settings.ENRICHMENT_TOTAL_TIMEOUT)
@@ -127,14 +129,17 @@ def _cache_response(key, response):
         }, hours=24)
 
 
-def request(method, url, *, source, minimum_interval=0, before_send=None, **kwargs):
+def request(method, url, *, source, minimum_interval=0, before_send=None,
+            validate_response=None, cache_response=True, **kwargs):
+    from .run_limits import guard_current
+    root = guard_current()
     domain = (urlsplit(url).hostname or "").lower()
     job = _current_job.get()
     fingerprint = hashlib.sha256(json.dumps(
         [method, url, kwargs.get("params"), str(kwargs.get("data", "")), kwargs.get("json")],
         sort_keys=True, default=str,
     ).encode()).hexdigest()
-    key = f"http-response:{job.pk}:{fingerprint}" if job else ""
+    key = f"http-response:{job.pk}:{fingerprint}" if job and cache_response else ""
     saved = cached_value(key) if key else None
     if saved and saved.get("observed_at"):
         response = requests.Response()
@@ -147,6 +152,12 @@ def request(method, url, *, source, minimum_interval=0, before_send=None, **kwar
         if response.status_code in {404, 410}:
             raise ConsultationError(f"{source} ({domain}) répond HTTP {response.status_code}.",
                                     source=source, http_status=response.status_code)
+        if validate_response:
+            try:
+                validate_response(response)
+            except ConsultationError:
+                ServiceCache.objects.filter(key=cache_key(key)).delete()
+                raise
         return response
     if job and job.payload.get("http_count", 0) >= getattr(settings, "HTTP_JOB_BUDGET", 500):
         raise ConsultationError("Budget total de consultation atteint pour cette tâche.", source=source)
@@ -168,6 +179,9 @@ def request(method, url, *, source, minimum_interval=0, before_send=None, **kwar
                                     temporary=True, deferred=True,
                                     retry_at=timezone.now() + timedelta(seconds=60), source=source)
         kwargs["timeout"] = min(kwargs.get("timeout", remaining), remaining)
+    if root and root.pilot_deadline:
+        kwargs["timeout"] = min(kwargs.get("timeout", 1200),
+                                (root.pilot_deadline-timezone.now()).total_seconds())
     _reserve(source, domain, minimum_interval)
     if job:
         job.payload["http_count"] = job.payload.get("http_count", 0) + 1
@@ -176,6 +190,7 @@ def request(method, url, *, source, minimum_interval=0, before_send=None, **kwar
         _save_payload(job)
     if before_send is not None:
         before_send()
+    guard_current()
     try:
         kwargs.setdefault("allow_redirects", False)
         response = requests.request(method, url, **kwargs)
@@ -184,6 +199,7 @@ def request(method, url, *, source, minimum_interval=0, before_send=None, **kwar
                        source, domain, type(exc).__name__)
         raise ConsultationError(f"Réseau indisponible pour {source} ({domain}).",
                                 temporary=True, source=source) from exc
+    guard_current()
     response.prospect_observed_at = timezone.now().isoformat()
     code = response.status_code
     if code == 429 or code >= 500:
@@ -202,5 +218,7 @@ def request(method, url, *, source, minimum_interval=0, before_send=None, **kwar
         raise ConsultationError(f"{source} ({domain}) répond HTTP {code}.",
                                 source=source, http_status=code)
     if 200 <= code < 300 or source == "website" and code in {301, 302, 303, 307, 308}:
+        if validate_response:
+            validate_response(response)
         _cache_response(key, response)
     return response

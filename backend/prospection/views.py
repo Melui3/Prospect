@@ -217,7 +217,10 @@ class CampaignViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         if is_demo_request(request):
             return Response(status=status.HTTP_204_NO_CONTENT)
-        return super().destroy(request, *args, **kwargs)
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=409)
 
     @action(detail=True, methods=["post"], url_path="launch")
     def launch(self, request, pk=None):
@@ -234,7 +237,10 @@ class CampaignViewSet(viewsets.ModelViewSet):
 
         from .jobs import enqueue_search
         from .personal_api import JobSerializer
-        job = enqueue_search(self.get_object())
+        try:
+            job = enqueue_search(self.get_object())
+        except ValueError as exc:
+            return Response({"error": str(exc)}, status=409)
         return Response({
             "message": "Recherche enregistrée dans la file persistante.",
             "status": job.status, "campaign_id": job.campaign_id,

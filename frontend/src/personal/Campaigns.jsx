@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Play, Pause, RefreshCw, Trash2, Plus, Radar } from "lucide-react";
-import { controlJob, createCampaign, deleteCampaign, errorMessage, getCampaigns, launchCampaign, setCampaignSchedule } from "./api";
+import { controlJob, createCampaign, deleteCampaign, errorMessage, getCampaigns, launchCampaign, setCampaignSchedule, stopCampaign } from "./api";
 import { Empty, IconButton, Loading, Notice, formatDate } from "./common";
 
 const sectors = ["Restaurant", "Boulangerie", "Coiffeur", "Garage", "Plombier", "Electricien", "Association", "Commerce", "Fleuriste", "Institut de beaute"];
@@ -53,14 +53,14 @@ export default function Campaigns() {
       <h2>Historique des recherches</h2>
       {!data ? <Loading /> : !data.length ? <Empty>Aucune recherche.</Empty> : <div className="p-table-wrap"><table className="p-table"><thead><tr><th>Recherche</th><th>Avancement</th><th>Entreprises</th><th>Avec email</th><th>Récurrence</th><th>Actions</th></tr></thead><tbody>{data.map((campaign) => {
         const job = campaign.job;
-        const active = ["queued", "running"].includes(job?.status);
+        const active = campaign.can_stop || ["queued", "running"].includes(job?.status);
         const resume = ["paused", "error"].includes(job?.status);
         return <tr key={campaign.id}>
           <td><Link className="p-name" to={`/prospects?campaign=${campaign.id}`}>{campaign.secteur}</Link><small>{campaign.ville} / {campaign.rayon_km} km</small></td>
           <td><span>{stateLabels[job?.status || campaign.status]}</span>{job && <div className="p-job-content"><small>{job.stage} {job.total ? `(${job.processed}/${job.total})` : ""}</small>{active && <progress value={job.processed} max={job.total || 1} />}<small>{job.outcome_label}</small>{job.failure_explanation && <small>{job.failure_explanation}</small>}{job.status === "queued" && job.error && <small>Reprise au plus tôt {formatDate(job.next_run_at)}</small>}<small className="p-danger">{job.error || campaign.error_message}</small></div>}</td>
           <td>{campaign.total_prospects}</td><td>{campaign.prospects_with_email}</td>
-          <td><div className="p-campaign-repeat"><select aria-label={`Récurrence ${campaign.secteur} ${campaign.ville}`} value={campaign.repeat_days || 0} disabled={busy === `schedule-${campaign.id}`} onChange={(e) => updateSchedule(campaign, Number(e.target.value))}><option value="0">Aucune</option><option value="7">Chaque semaine</option><option value="14">Toutes les deux semaines</option><option value="30">Chaque mois</option></select>{campaign.next_search_at && <small>Prochaine : {formatDate(campaign.next_search_at)}</small>}</div></td>
-          <td><div className="p-actions"><IconButton icon={active ? Pause : Play} label={active ? "Mettre en pause" : resume ? "Reprendre" : "Relancer la recherche"} disabled={busy === campaign.id} onClick={() => execute(campaign.id, () => active || resume ? controlJob(job.id, active ? "pause" : "resume") : launchCampaign(campaign.id))} /><IconButton icon={Trash2} label="Supprimer la recherche, conserver les contacts" disabled={active || busy === campaign.id} onClick={() => { if (window.confirm("Supprimer cette recherche ? Les entreprises et leur historique sont conserves.")) execute(campaign.id, () => deleteCampaign(campaign.id)); }} /></div></td>
+          <td><div className="p-campaign-repeat"><select aria-label={`Récurrence ${campaign.secteur} ${campaign.ville}`} value={campaign.repeat_days || 0} disabled={campaign.pilot_once || busy === `schedule-${campaign.id}`} onChange={(e) => updateSchedule(campaign, Number(e.target.value))}><option value="0">Aucune</option><option value="7">Chaque semaine</option><option value="14">Toutes les deux semaines</option><option value="30">Chaque mois</option></select>{campaign.next_search_at && <small>Prochaine : {formatDate(campaign.next_search_at)}</small>}</div></td>
+          <td><div className="p-actions"><IconButton icon={active ? Pause : Play} label={active ? "Arrêter la campagne" : resume ? "Reprendre" : "Relancer la recherche"} disabled={busy === campaign.id} onClick={() => execute(campaign.id, () => active ? stopCampaign(campaign.id) : resume ? controlJob(job.id, "resume") : launchCampaign(campaign.id))} /><IconButton icon={Trash2} label="Supprimer la recherche, conserver les contacts" disabled={active || busy === campaign.id} onClick={() => { if (window.confirm("Supprimer cette recherche ? Les entreprises et leur historique sont conserves.")) execute(campaign.id, () => deleteCampaign(campaign.id)); }} /></div></td>
         </tr>;
       })}</tbody></table></div>}
     </section>

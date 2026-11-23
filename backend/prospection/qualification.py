@@ -100,6 +100,8 @@ def draft_suggestion(review):
 
 @transaction.atomic
 def _save_review(prospect, status, reasons, evidence, priority="low", preserve_deferred=False):
+    from .run_limits import guard_current
+    guard_current()
     existing = QualificationReview.objects.select_for_update().filter(prospect=prospect).first()
     if existing and existing.status in {"approved", "rejected", "excluded"}:
         return existing
@@ -116,6 +118,7 @@ def _save_review(prospect, status, reasons, evidence, priority="low", preserve_d
         defaults={"status": status, "priority": priority, "reasons": reasons,
                   "evidence": history + evidence, "checked_at": timezone.now()},
     )
+    guard_current()
     return review
 
 
